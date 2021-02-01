@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+    <form action="?test" method="POST">
+        <input type="hidden" name="include-gameinfo" id="gameinfo">
+        <label for="gameinfo">Include game info</label>
+        <p>*Please note that due to rate limit imposed by the steam store api, fetching game info may take a long time if your collection includes titles not yet cached in the server database. If that is the case, you will be redirected to a separate page with information on how long it will take to export your spreadsheet.</p>
+        <button type="submit">Generate Spreadsheet</button>
+    </form>
+{% endblock %}
