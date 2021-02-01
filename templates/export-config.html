@@ -1,9 +1,29 @@
 {% extends "base.html" %}
 {% block body %}
-    <form action="?test" method="POST">
-        <input type="hidden" name="include-gameinfo" id="gameinfo">
-        <label for="gameinfo">Include game info</label>
-        <p>*Please note that due to rate limit imposed by the steam store api, fetching game info may take a long time if your collection includes titles not yet cached in the server database. If that is the case, you will be redirected to a separate page with information on how long it will take to export your spreadsheet.</p>
+<form class="export-form" action="?export" method="POST">
+<!--<div class="input-group">
+        <p>Output format</p>
+        <div class="input-container">
+            <input type="radio" name="format" value="ods" id="format-ods" checked>
+            <label for="format-ods">Open Document Spreadsheet (.ods)</label>
+        </div>
+        <div class="input-container">
+            <input type="radio" name="format" value="xlsx" id="format-xlsx">
+            <label for="format-xlsx">Excel Spreadsheet (.xlsx)</label>
+        </div>
+        <div class="input-container">
+            <input type="radio" name="format" value="csv" id="format-csv">
+            <label for="format-csv">CSV (.csv)</label>
+        </div>
+    </div>
+    <div class="input-group">
+        <input type="checkbox" name="include-gameinfo" id="gameinfo" checked>
+        <label class="input-label" for="gameinfo">Include game info*</label>
+    </div>-->
+    <div class="input-group button-group">
         <button type="submit">Generate Spreadsheet</button>
-    </form>
+    </div>
+</form>
+<p>*Please note that due to rate limit imposed by the steam store api, fetching game info may take a long time if your collection includes titles not yet cached in the server database. If that is the case, you will be redirected to a separate page with information on how long it will take to export your spreadsheet.
+</p>
 {% endblock %}
