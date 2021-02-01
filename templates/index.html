@@ -7,8 +7,8 @@
         <p>I plan to eventually expand the functionality to also fetch the game details from the store api (publisher, developer, release date, tags, genres, etc.).</p>
         <h1>How does this work?</h1>
         <p>Written in python, using flask, flask-openid, requests, and pyexcel.</p>
-        <p>Authentication is handled through Open ID - valve handles your credentials directly on their site, and will redirect you back here afterwards with your account's steamID encoded in url. This id is then used to perform a lookup of owned games through steam's web api (api.steampowered.com/IPlayerService/GetOwnedGames/) which are then exported into open document spreadsheet format.</p>
-        <p>Source code will be made available eventually, after I clean up the code a bit.</p>
+        <p>Authentication is handled through OpenID - valve handles your credentials directly on their site, and will redirect you afterwards to the app with your account's steamID encoded in the url. This id is then used to perform a lookup of owned games through steam's web api (api.steampowered.com/IPlayerService/GetOwnedGames/).</p>
+        <p>Source code available at <a href="https://github.com/rmmbear/steam-games-exporter">github.com/rmmbear</a></p>
         <h1>Is my account information retained on the server?</h1>
         <p>No. Your steamid is kept client-side, in a session cookie, which is cleared after looking up owned games. That list is kept on the server up until the spreadsheet has been generated.</p>
     </div>
