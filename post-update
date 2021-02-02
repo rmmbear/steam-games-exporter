@@ -1,9 +1,53 @@
 #!/bin/sh
-#copy this file to .git/hooks to enable uwsgi emperor reload on push
-#TODO: check if requirements.txt has been modified. if so, regenerate venv
-# python3 venv %{VENV_ROOT}/project;
-#{VENV_ROOT}/project/bin/pip install --upgrade pip
-#{VENV_ROOT}/project/bin/pip install -r ../requirements.txt
-echo "Touching config to reload the app"
-touch ../vassal.ini
-echo "Done!"
+#copy this file to .git/hooks to enable uwsgi emperor reload and venve regenration on push
+VENV_DIR="../.venv"
+PRODUCTION_BRANCH="latest"
+
+while read oldrev newrev ref
+do
+    # oldrev in a newly created repo is "blank"
+    # replace it with a hash of an empty tree instead
+    #https://stackoverflow.com/questions/40883798/#40884093
+    #https://stackoverflow.com/questions/9765453
+    if [ "$oldrev" = "0000000000000000000000000000000000000000" ]
+    then
+        oldrev=$(git hash-object -t tree /dev/null)
+    fi
+    if [ "$ref" = "refs/heads/$PRODUCTION_BRANCH" ]
+    then
+        ### Confirm we're on the right branch
+        if [ $(git rev-parse --abbrev-ref HEAD) != "$PRODUCTION_BRANCH" ]
+        then
+            echo "Checking out to branch $PRODUCTION_BRANCH"
+            git --git-dir="." --work-tree=".." checkout "$PRODUCTION_BRANCH"
+        fi
+        ### (re)Generate python virtual environment
+        for filename in $(git diff-tree -r --name-only $oldrev $newrev)
+        do
+            if [ $filename = "requirements.txt" ]
+            then
+                echo "Generating venv..."
+                python3 -m venv --clear "$VENV_DIR"
+                echo "Upgrading pip..."
+                $VENV_DIR/bin/pip install --upgrade pip
+                echo "Installing packages from requirements.txt..."
+                $VENV_DIR/bin/pip install -r "../requirements.txt"
+                echo "Done!"
+                break
+            fi
+        done
+        ### Tell emperor to reload app configuration
+        # check if file exists. If it does not, touching could
+        # cause issues during next push
+        if [ -e "../vassal.ini" ]
+        then
+            echo "Touching config to reload the app"
+            touch "../vassal.ini"
+            echo "Done!"
+        else
+            echo "WARNING: vassal.ini not found!"
+        fi
+    else
+        echo "Ref $ref received. Doing nothing."
+    fi
+done
