@@ -1,5 +1,7 @@
+Flask-OpenID==1.2.5
 Flask==1.1.2
 pyexcel-ods3==0.6.0
+pyexcel-xls==0.6.2
+pyexcel-xlsx==0.6.0
 python3-openid==3.2.0
 requests==2.25.1
-Flask-OpenID==1.2.5
