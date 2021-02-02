@@ -10,5 +10,5 @@ Available online at [misc.untextured.space/tools/steam-games-exporter](https://m
 
 
 ### Planned features:
-* csv and xlsx export
+* ~~csv, xlsx, and xls export~~ Done!
 * expand metadata with info from steam store api
