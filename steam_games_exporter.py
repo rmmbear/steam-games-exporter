@@ -30,6 +30,7 @@ STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.ERROR)
+DEBUG_TOOLBAR = None
 
 FLASK_ENV = os.environ.get("FLASK_ENV")
 if FLASK_ENV == "development":
@@ -43,7 +44,14 @@ if FLASK_ENV == "development":
 APP = flask.Flask(__name__, static_url_path=config.STATIC_URL_PATH)
 APP.config.from_object(config)
 OID = flask_openid.OpenID(APP)
-
+# if available, and in debug mode, import and enable flask debug toolbar
+if APP.debug:
+    try:
+        import flask_debugtoolbar
+        DEBUG_TOOLBAR = flask_debugtoolbar.DebugToolbarExtension(APP)
+        del flask_debugtoolbar
+    except ImportError:
+        pass
 
 # https://partner.steamgames.com/doc/webapi_overview/responses
 KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
@@ -69,6 +77,14 @@ def index() -> str:
 
     return flask.render_template("index.html")
 
+#FIXME: flask-openid encounters issues related to missing fields in steam's response
+# KeyError: ('http://specs.openid.net/auth/2.0', 'assoc_type')
+# this does not seem to cause any issues down the line
+# this exact same issue: https://github.com/mitsuhiko/flask-openid/issues/48
+#FIXME: openid discovery performed in login regardless of context
+# i.e. a request to https://steamcommunity.com/openid/login is made each time login() is called
+# with these two issues in mind, I think it would make the most sense to ditch flask-openid
+# and interact with python-openid directly
 
 @APP.route('/tools/steam-games-exporter/login', methods=['GET', 'POST'])
 @OID.loginhandler
@@ -109,7 +125,6 @@ def games_export_config():
 #    {"<appid>": {"success": False}}
 # afaik there is no workaround for this (without using a proxy of some kind)
 # these titles must be queried from regions in which they are available
-#TODO: offer xlsx and csv export
 
 #Notes on formats:
 # based on artificial tests with random and static data
@@ -123,8 +138,8 @@ def games_export_config():
 # between 100 - 1000 items in their steam library, export times
 # for this range are reasonable even for ods. Exception could be
 # made fot larger collections, but only for xlsx and ods
-# xls and cs should not be retained because of their short export times
-# csv especially for its big file sizes
+# xls and csv should not be retained because of their short export times
+# csv doubly so because of its big file sizes
 
 def games_export_extended(format: str) -> flask.Response:
     raise NotImplementedError()
