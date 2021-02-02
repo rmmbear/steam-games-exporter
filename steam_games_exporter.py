@@ -1,13 +1,18 @@
 import os
+import csv
 import sys
 import time
 import logging
 import tempfile
 
 import flask
-import requests
 import flask_openid
-import pyexcel_ods3 as ods
+
+import requests
+
+import pyexcel_xls as pyxls
+import pyexcel_xlsx as pyxlsx
+import pyexcel_ods3 as pyods
 
 #TODO: probably should structure this as a package
 # but this requires less thinking
@@ -54,7 +59,7 @@ PROFILE_RELEVANT_FIELDS = (
 
 
 @APP.route('/tools/steam-games-exporter/')
-def index():
+def index() -> str:
     """landing page"""
     #cookie check
     if "c" not in flask.session:
@@ -66,9 +71,7 @@ def index():
 @APP.route('/tools/steam-games-exporter/login', methods=['GET', 'POST'])
 @OID.loginhandler
 def login():
-    """Redirect to steam for authentication.
-    Successful
-    """
+    """Redirect to steam for authentication"""
     cookies = bool(flask.session)
     if "steamid" in flask.session:
         return flask.redirect(flask.url_for("games_export_config"))
@@ -89,11 +92,13 @@ def create_session(resp):
 
 @APP.route("/tools/steam-games-exporter/export", methods=("GET", "POST"))
 def games_export_config():
-    """display and handle export config"""
+    """Display and handle export config"""
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("index"))
     if flask.request.method == "POST":
-        return games_export_simple()
+        if flask.request.form["format"] not in ["ods", "xls", "xlsx", "csv"]:
+            flask.abort(400)
+        return games_export_simple(flask.request.form["format"])
 
     return flask.render_template("export-config.html")
 
@@ -104,11 +109,26 @@ def games_export_config():
 # these titles must be queried from regions in which they are available
 #TODO: offer xlsx and csv export
 
-def games_export_extended():
+#Notes on formats:
+# based on artificial tests with random and static data
+# export time, lowest -> highest
+# csv -> xls -> xlsx -> ods
+# file size
+# ods -> xlsx -> xls -> csv
+#
+# based on this, my conclusion is that saving generated files
+# is not necessary - majority of users will most likely have
+# between 100 - 1000 items in their steam library, export times
+# for this range are reasonable even for ods. Exception could be
+# made fot larger collections, but only for xlsx and ods
+# xls and cs should not be retained because of their short export times
+# csv especially for its big file sizes
+
+def games_export_extended(format: str) -> flask.Response:
     raise NotImplementedError()
 
 
-def games_export_simple():
+def games_export_simple(file_format: str):
     """Simple export without game info"""
     api_session = APISession()
     with api_session as s:
@@ -131,12 +151,32 @@ def games_export_simple():
         game_row[0] = "https://store.steampowered.com/app/{}".format(game_row[0])
         games.append(game_row)
 
+    del games_json
+
     try:
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        ods.save_data(tmp, {"GAMES":games})
+        if file_format == "ods":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyods.save_data(tmp, {"GAMES":games})
+        elif file_format == "xls":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyxls.save_data(tmp, {"GAMES":games})
+        elif file_format == "xlsx":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyxlsx.save_data(tmp, {"GAMES":games})
+        elif file_format == "csv":
+            tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
+            csv_writer = csv.writer(tmp)
+            for row in games:
+                 csv_writer.writerow(row)
+        else:
+            # this should be caught earlier in the flow, but _just in case_
+            raise ValueError(f"Unknown file format: {file_format}")
+
         tmp.close()
-        return flask.send_file(tmp.name, as_attachment=True, attachment_filename="games.ods")
+        return flask.send_file(tmp.name, as_attachment=True,
+                               attachment_filename=f"games.{file_format}")
     finally:
+        tmp.close()
         os.unlink(tmp.name)
 
 
@@ -144,27 +184,27 @@ class APISession():
     """Simple context manager taking advantage of connection pooling"""
     user_agent = f"SteamGamesFetcher/{__VERSION__} (+https://github.com/rmmbear)"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.requests_session = requests.Session()
         self.requests_session.headers["User-Agent"] = self.user_agent
 
 
-    def __enter__(self):
+    def __enter__(self) -> "APISession":
         return self
 
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args: Any, **kwargs: Any) -> False:
         self.requests_session.close()
         return False
 
 
-    def query_store(self, appid: int) -> "json":
+    def query_store(self, appid: int):
         raise NotImplementedError()
         query = requests.Request("GET", STORE_API.format(appid=appid))
         query = self.requests_session.prepare_request(query)
 
 
-    def query_profile(self, steamid: int) -> "json":
+    def query_profile(self, steamid: int):
         _query = requests.Request("GET", GAMES_API.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
         _query = self.requests_session.prepare_request(_query)
 
@@ -177,7 +217,7 @@ class APISession():
     def query(self, prepared_query: requests.PreparedRequest, max_retries: int = 2
              ) -> requests.Response:
         """Error handling helper"""
-        exp_delay = (2**x for x in range(max_retries))
+        exp_delay = [2**x for x in range(max_retries)]
         retry_count = 0
         while True:
             try:
@@ -205,7 +245,6 @@ class APISession():
                 LOGGER.error("request url = %s", prepared_query.url)
                 LOGGER.error("request method = %s", prepared_query.method)
                 LOGGER.error("request headers = %s", prepared_query.headers)
-                LOGGER.error("request body = %s", prepared_query.body)
                 raise err
 
             retry_count += 1
