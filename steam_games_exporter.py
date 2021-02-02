@@ -5,6 +5,8 @@ import time
 import logging
 import tempfile
 
+from typing import Any
+
 import flask
 import flask_openid
 
