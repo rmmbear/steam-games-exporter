@@ -44,16 +44,23 @@ def test_routing(app_client_fixture):
     assert client.cookie_jar
     assert resp.headers.get("Location").startswith("https://steamcommunity.com/openid/login")
 
-    # ensure user is not redirected (so an error message can be shown) when cookies are missing
+    # POST: user is not redirected (so an error message can be shown) when cookies are missing
     client.cookie_jar.clear()
     resp = client.post("/tools/steam-games-exporter/login")
     assert resp.status_code == 200
     assert not client.cookie_jar
     assert not resp.headers.get("Location")
 
-    # ensure user is redirected back to index if cookies are missing
+    # POST: user is redirected back to index if cookies are missing
     client.cookie_jar.clear()
     resp = client.post("/tools/steam-games-exporter/export")
+    assert resp.status_code == 302
+    assert not client.cookie_jar
+    assert urlparse(resp.headers.get("Location")).path == "/tools/steam-games-exporter/"
+
+    # GET: user is redirected back to index if cookies are missing
+    client.cookie_jar.clear()
+    resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 302
     assert not client.cookie_jar
     assert urlparse(resp.headers.get("Location")).path == "/tools/steam-games-exporter/"
