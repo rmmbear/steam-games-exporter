@@ -16,6 +16,9 @@ import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
+import sqlalchemy as sqla
+import sqlalchemy.orm
+
 #TODO: probably should structure this as a package
 # but this requires less thinking
 sys.path.insert(0, os.path.realpath(__file__).rsplit("/", maxsplit=1)[0])
@@ -53,6 +56,7 @@ if APP.debug:
     except ImportError:
         pass
 
+
 # https://partner.steamgames.com/doc/webapi_overview/responses
 KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
 # https://partner.steamgames.com/doc/webapi_overview/responses
@@ -66,6 +70,34 @@ PROFILE_RELEVANT_FIELDS = (
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
 )
+
+DBOrmBase = sqlalchemy.orm.declarative_base()
+
+class Request(DBOrmBase):
+    __tablename__ = "requests_queue"
+    job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
+    timestamp = sqlalchemy.Column(sqlalchemy.Integer)
+    games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
+    generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
+
+class Queue(DBOrmBase):
+    __tablename__ = "games_queue"
+    job_uuid = sqlalchemy.Column(sqlalchemy.String)
+    appid = sqlalchemy.Column(sqlalchemy.Integer)
+    job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
+
+class GameInfo(DBOrmBase):
+    __tablename__ = "games_info"
+    appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+    name = sqlalchemy.Column(sqlalchemy.String)
+    developers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
+    publishers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
+    on_linux = sqlalchemy.Column(sqlalchemy.Boolean)
+    on_mac = sqlalchemy.Column(sqlalchemy.Boolean)
+    on_windows = sqlalchemy.Column(sqlalchemy.Boolean)
+    categories = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
+    genres = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
+    release_date = sqlalchemy.Column(sqlalchemy.String)
 
 
 @APP.route('/tools/steam-games-exporter/')
@@ -84,7 +116,8 @@ def index() -> str:
 #FIXME: openid discovery performed in login regardless of context
 # i.e. a request to https://steamcommunity.com/openid/login is made each time login() is called
 # with these two issues in mind, I think it would make the most sense to ditch flask-openid
-# and interact with python-openid directly
+# and interact with python-openid directly, as much as I hate the concept of
+# "code is documentation" that they're using
 
 @APP.route('/tools/steam-games-exporter/login', methods=['GET', 'POST'])
 @OID.loginhandler
@@ -215,13 +248,13 @@ class APISession():
         return False
 
 
-    def query_store(self, appid: int):
+    def query_store(self, appid: int) -> Optional[str]:
         raise NotImplementedError()
         query = requests.Request("GET", STORE_API.format(appid=appid))
         query = self.requests_session.prepare_request(query)
 
 
-    def query_profile(self, steamid: int):
+    def query_profile(self, steamid: int) -> Optional[str]:
         _query = requests.Request("GET", GAMES_API.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
         _query = self.requests_session.prepare_request(_query)
 
