@@ -5,7 +5,7 @@ import time
 import logging
 import tempfile
 
-from typing import Any
+from typing import Any, Optional
 
 import flask
 import flask_openid
@@ -16,8 +16,8 @@ import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
-import sqlalchemy as sqla
-import sqlalchemy.orm
+import sqlalchemy
+from sqlalchemy.ext.declarative import declarative_base
 
 #TODO: probably should structure this as a package
 # but this requires less thinking
@@ -71,7 +71,7 @@ PROFILE_RELEVANT_FIELDS = (
     "playtime_mac_forever", "playtime_linux_forever"
 )
 
-DBOrmBase = sqlalchemy.orm.declarative_base()
+DBOrmBase = declarative_base()
 
 class Request(DBOrmBase):
     __tablename__ = "requests_queue"
@@ -82,7 +82,7 @@ class Request(DBOrmBase):
 
 class Queue(DBOrmBase):
     __tablename__ = "games_queue"
-    job_uuid = sqlalchemy.Column(sqlalchemy.String)
+    job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     appid = sqlalchemy.Column(sqlalchemy.Integer)
     job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
 
@@ -146,6 +146,7 @@ def games_export_config():
     """Display and handle export config"""
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("index"))
+
     if flask.request.method == "POST":
         if flask.request.form["format"] not in ["ods", "xls", "xlsx", "csv"]:
             flask.abort(400)
@@ -163,7 +164,7 @@ def games_export_config():
 # based on artificial tests with random and static data
 # export time, lowest -> highest
 # csv -> xls -> xlsx -> ods
-# file size
+# file size, smallest -> biggest
 # ods -> xlsx -> xls -> csv
 #
 # based on this, my conclusion is that saving generated files
@@ -217,7 +218,7 @@ def games_export_simple(file_format: str):
             tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
             csv_writer = csv.writer(tmp)
             for row in games:
-                 csv_writer.writerow(row)
+                csv_writer.writerow(row)
         else:
             # this should be caught earlier in the flow, but _just in case_
             raise ValueError(f"Unknown file format: {file_format}")
