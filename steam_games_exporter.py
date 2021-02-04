@@ -150,7 +150,11 @@ def games_export_config():
     if flask.request.method == "POST":
         if flask.request.form["format"] not in ["ods", "xls", "xlsx", "csv"]:
             flask.abort(400)
-        return games_export_simple(flask.request.form["format"])
+
+        steamid = flask.session["steamid"]
+        # we don't need steamid anymore, so throw it out
+        del flask.session["steamid"]
+        return games_export_simple(steamid, flask.request.form["format"])
 
     return flask.render_template("export-config.html")
 
@@ -175,25 +179,23 @@ def games_export_config():
 # xls and csv should not be retained because of their short export times
 # csv doubly so because of its big file sizes
 
-def games_export_extended(format: str) -> flask.Response:
+def games_export_extended(steamid: int, file_format: str):
     raise NotImplementedError()
 
 
-def games_export_simple(file_format: str):
+def games_export_simple(steamid: int, file_format: str):
     """Simple export without game info"""
     api_session = APISession()
     with api_session as s:
-        games_json = s.query_profile(flask.session["steamid"])
+        games_json = s.query_profile(steamid)
 
     if not games_json:
         return flask.render_template(
             "login.html",
             error="Cannot export data: this account does not own any games"
         )
-    # we don't need steamid anymore, so throw it out
-    del flask.session["steamid"]
-    games_json = games_json["games"]
 
+    games_json = games_json["games"]
     games = [list(PROFILE_RELEVANT_FIELDS)]
     games[0][0] = "store_url"
     # iterate over the games, extract only relevant fields, replace appid with store link
