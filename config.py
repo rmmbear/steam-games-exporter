@@ -9,3 +9,5 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = True
 STATIC_URL_PATH = "/tools/steam-games-exporter/static"
+DEBUG = False
+TESTING = False

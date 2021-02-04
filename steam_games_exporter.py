@@ -5,10 +5,11 @@ import time
 import logging
 import tempfile
 
-from typing import Any, Optional
+from typing import Any, IO, Optional, Union
 
 import flask
 import flask_openid
+import werkzeug
 
 import requests
 
@@ -17,7 +18,7 @@ import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
 import sqlalchemy
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 
 #TODO: probably should structure this as a package
 # but this requires less thinking
@@ -71,22 +72,22 @@ PROFILE_RELEVANT_FIELDS = (
     "playtime_mac_forever", "playtime_linux_forever"
 )
 
-DBOrmBase = declarative_base()
+ORM_BASE: DeclarativeMeta = declarative_base()
 
-class Request(DBOrmBase):
+class Request(ORM_BASE):
     __tablename__ = "requests_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     timestamp = sqlalchemy.Column(sqlalchemy.Integer)
     games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
     generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
 
-class Queue(DBOrmBase):
+class Queue(ORM_BASE):
     __tablename__ = "games_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     appid = sqlalchemy.Column(sqlalchemy.Integer)
     job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
 
-class GameInfo(DBOrmBase):
+class GameInfo(ORM_BASE):
     __tablename__ = "games_info"
     appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     name = sqlalchemy.Column(sqlalchemy.String)
@@ -121,7 +122,7 @@ def index() -> str:
 
 @APP.route('/tools/steam-games-exporter/login', methods=['GET', 'POST'])
 @OID.loginhandler
-def login():
+def login() -> Union[werkzeug.wrappers.Response, str]:
     """Redirect to steam for authentication"""
     cookies = bool(flask.session)
     if "steamid" in flask.session:
@@ -135,14 +136,14 @@ def login():
 
 
 @OID.after_login
-def create_session(resp):
+def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Response:
     """called automatically instead of login() after successful authentication"""
     flask.session["steamid"] = resp.identity_url.rsplit("/", maxsplit=1)[-1]
     return flask.redirect(flask.url_for("games_export_config"))
 
 
 @APP.route("/tools/steam-games-exporter/export", methods=("GET", "POST"))
-def games_export_config():
+def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
     """Display and handle export config"""
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("index"))
@@ -179,11 +180,13 @@ def games_export_config():
 # xls and csv should not be retained because of their short export times
 # csv doubly so because of its big file sizes
 
-def games_export_extended(steamid: int, file_format: str):
+def games_export_extended(steamid: int, file_format: str
+                         ) -> Union[werkzeug.wrappers.Response, str]:
     raise NotImplementedError()
 
 
-def games_export_simple(steamid: int, file_format: str):
+def games_export_simple(steamid: int, file_format: str
+                       ) -> Union[werkzeug.wrappers.Response, str]:
     """Simple export without game info"""
     api_session = APISession()
     with api_session as s:
@@ -205,8 +208,8 @@ def games_export_simple(steamid: int, file_format: str):
         games.append(game_row)
 
     del games_json
-
     try:
+        tmp: Union [IO[str], IO[bytes]]
         if file_format == "ods":
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyods.save_data(tmp, {"GAMES":games})
@@ -226,8 +229,8 @@ def games_export_simple(steamid: int, file_format: str):
             raise ValueError(f"Unknown file format: {file_format}")
 
         tmp.close()
-        return flask.send_file(tmp.name, as_attachment=True,
-                               attachment_filename=f"games.{file_format}")
+        return flask.send_file(
+            tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
     finally:
         tmp.close()
         os.unlink(tmp.name)
@@ -251,13 +254,13 @@ class APISession():
         return False
 
 
-    def query_store(self, appid: int) -> Optional[str]:
+    def query_store(self, appid: int) -> Optional[dict]:
         raise NotImplementedError()
         query = requests.Request("GET", STORE_API.format(appid=appid))
         query = self.requests_session.prepare_request(query)
 
 
-    def query_profile(self, steamid: int) -> Optional[str]:
+    def query_profile(self, steamid: int) -> Optional[dict]:
         _query = requests.Request("GET", GAMES_API.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
         _query = self.requests_session.prepare_request(_query)
 
