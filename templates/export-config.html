@@ -20,8 +20,14 @@
             <label for="format-csv">Comma Separated Values (.csv)</label>
         </div>
     </div>
+    <div class="input-group">
+        <input type="checkbox" name="include-gameinfo" id="gameinfo" checked>
+        <label class="input-label" for="gameinfo">Include game info*</label>
+    </div>
     <div class="input-group button-group">
         <button type="submit">Generate Spreadsheet</button>
     </div>
 </form>
+<p>*Please note that due to rate limit imposed by the steam store api, fetching game info may take a long time if your collection includes titles not yet cached in the server database. If that is the case, you will be redirected to a separate page with information on how long it will take to export your spreadsheet.
+</p>
 {% endblock %}
