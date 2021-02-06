@@ -1,7 +1,9 @@
 import os
 import csv
 import sys
+import json
 import time
+import uuid
 import logging
 import tempfile
 
@@ -60,6 +62,7 @@ if APP.debug:
     except ImportError:
         pass
 
+COOKIE_MAX_AGE = 86400 # 1 day
 
 # https://partner.steamgames.com/doc/webapi_overview/responses
 KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
@@ -77,12 +80,24 @@ PROFILE_RELEVANT_FIELDS = (
 
 ORM_BASE: DeclarativeMeta = declarative_base()
 
+#TODO: naming collision with all the networking/server stuff, find a better name
 class Request(ORM_BASE):
     __tablename__ = "requests_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     timestamp = sqlalchemy.Column(sqlalchemy.Integer)
     games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
+    export_format = sqlalchemy.Column(sqlalchemy.String)
     generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
+
+    def __init__(self, games_json: dict, export_format: str):
+        if export_format not in ["ods", "xls", "xlsx", "csv"]:
+            raise ValueError(f"Export format not recognized {export_format}")
+
+        self.job_uuid = uuid.uuid4()
+        self.timestamp = int(time.time())
+        self.games_json = json.dumps(games_json)
+        self.export_format = export_format
+        self.generated_file = None
 
 
 class Queue(ORM_BASE):
@@ -172,6 +187,9 @@ def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Respo
 @APP.route("/tools/steam-games-exporter/export", methods=("GET", "POST"))
 def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
     """Display and handle export config"""
+    if flask.g.job:
+        return finalize_extended_export(flask.g.job)
+
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("index"))
 
@@ -181,7 +199,25 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 
         steamid = flask.session["steamid"]
         # we don't need steamid anymore, so throw it out
-        del flask.session["steamid"]
+        flask.session.clear()
+
+        if flask.request.form["include-gameinfo"]:
+            exported = export_games_extended(steamid, flask.request.form["format"])
+            # did not return file, game info still needs to be fetched
+            if isinstance(exported, Request):
+                db_session = DB_SESSION()
+                db_session.add(exported)
+                db_session.commit()
+                resp = flask.make_response(exported)
+                resp.set_cookie(
+                    "job", value=exported.job_uuid, max_age=COOKIE_MAX_AGE,
+                    path="/tools/steam-games-exporter/",
+                    secure=False, httponly=True, samesite="Lax"
+                )
+                return resp
+
+            return exported
+
         return export_games_simple(steamid, flask.request.form["format"])
 
     return flask.render_template("export-config.html")
@@ -208,17 +244,23 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # csv doubly so because of its big file sizes
 
 def export_games_extended(steamid: int, file_format: str
-                         ) -> Union[werkzeug.wrappers.Response, str]:
+                         ) -> Union[werkzeug.wrappers.Response, Request, str]:
     """Initiate export, create all necessary db rows, return control to finalize_
     Returns:
-        str - error page or delayed export warning
-        flask response - send exported file
+        str - error page
+        Request - request object to be committed by caller
+        flask response - successfully exported and began sending the file
     """
     raise NotImplementedError()
     #return finalize_extended_export()
 
 
 def finalize_extended_export(request_job: Request)-> Union[werkzeug.wrappers.Response, str]:
+    """Combine profile json with stored game info.
+    Returns:
+        str             -> error page / notification about ongoing export
+        flask response  -> successfully exported and began sending the file
+    """
     raise NotImplementedError()
 
 
