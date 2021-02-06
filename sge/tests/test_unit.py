@@ -1,19 +1,15 @@
 import os
-import sys
 import logging
-
 from urllib.parse import urlparse
 
 import pytest
 
 os.environ["FLASK_ENV"] = "development"
-ONE_DIR_UP = os.path.join(os.path.realpath(__file__).rsplit("/", maxsplit=1)[0], "..")
-sys.path.append(ONE_DIR_UP)
-import steam_games_exporter as SGE
-SGE.APP.config.update(SECRET_KEY="devkey")
 
+from sge import steam_games_exporter as SGE
+SGE.APP.config.update(SECRET_KEY="devkey")
 LOGGER = logging.getLogger()
-LOGGER.setLevel(logging.INFO)
+LOGGER.setLevel(logging.DEBUG)
 
 @pytest.fixture
 def app_client_fixture():

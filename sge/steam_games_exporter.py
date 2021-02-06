@@ -1,12 +1,9 @@
 import os
 import csv
-import sys
 import json
 import time
-import uuid
 import logging
 import tempfile
-
 from typing import Any, IO, Optional, Union
 
 import flask
@@ -19,16 +16,24 @@ import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
-import sqlalchemy
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
-
-#TODO: probably should structure this as a package
-# but this requires less thinking
-sys.path.insert(0, os.path.realpath(__file__).rsplit("/", maxsplit=1)[0])
-import config
+from sge import config, db
 
 __VERSION__ = "0.1"
+
+COOKIE_MAX_AGE = 86400 # 1 day
+# https://partner.steamgames.com/doc/webapi_overview/responses
+KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
+# https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI#appdetails
+API_STORE_URL = "https://store.steampowered.com/api/appdetails/?appids={appid}"
+# https://developer.valvesoftware.com/wiki/Steam_Web_API
+API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
+                "?key={key}&steamid={steamid}&format=json&include_appinfo=1"
+API_GAMES_NOINFO_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
+                       "?key={key}&steamid={steamid}&format=json"
+PROFILE_RELEVANT_FIELDS = (
+    "appid", "name", "playtime_forever", "playtime_windows_forever",
+    "playtime_mac_forever", "playtime_linux_forever"
+)
 
 # This is set automatically by emperor (see vassal.ini), has to be set manually in dev env
 # key.ini mentioned in vassal.ini is a one liner setting environment variable containing dev key
@@ -50,7 +55,14 @@ if FLASK_ENV == "development":
     config.DEBUG = True
     config.TESTING = True
 
-APP = flask.Flask(__name__, static_url_path=config.STATIC_URL_PATH)
+
+PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
+APP = flask.Flask(
+    __name__,
+    static_url_path=config.STATIC_URL_PATH,
+    static_folder=os.path.join(PWD, "../static"),
+    template_folder=os.path.join(PWD, "../templates"),
+)
 APP.config.from_object(config)
 OID = flask_openid.OpenID(APP)
 # if available, and in debug mode, import and enable flask debug toolbar
@@ -62,85 +74,28 @@ if APP.debug:
     except ImportError:
         pass
 
-COOKIE_MAX_AGE = 86400 # 1 day
-
-# https://partner.steamgames.com/doc/webapi_overview/responses
-KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
-# https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI#appdetails
-API_STORE_URL = "https://store.steampowered.com/api/appdetails/?appids={appid}"
-# https://developer.valvesoftware.com/wiki/Steam_Web_API
-API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
-                "?key={key}&steamid={steamid}&format=json&include_appinfo=1"
-API_GAMES_NOINFO_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
-                       "?key={key}&steamid={steamid}&format=json"
-PROFILE_RELEVANT_FIELDS = (
-    "appid", "name", "playtime_forever", "playtime_windows_forever",
-    "playtime_mac_forever", "playtime_linux_forever"
-)
-
-ORM_BASE: DeclarativeMeta = declarative_base()
-
-#TODO: naming collision with all the networking/server stuff, find a better name
-class Request(ORM_BASE):
-    __tablename__ = "requests_queue"
-    job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
-    timestamp = sqlalchemy.Column(sqlalchemy.Integer)
-    games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
-    export_format = sqlalchemy.Column(sqlalchemy.String)
-    generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
-
-    def __init__(self, games_json: dict, export_format: str):
-        if export_format not in ["ods", "xls", "xlsx", "csv"]:
-            raise ValueError(f"Export format not recognized {export_format}")
-
-        self.job_uuid = uuid.uuid4()
-        self.timestamp = int(time.time())
-        self.games_json = json.dumps(games_json)
-        self.export_format = export_format
-        self.generated_file = None
-
-
-class Queue(ORM_BASE):
-    __tablename__ = "games_queue"
-    job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
-    appid = sqlalchemy.Column(sqlalchemy.Integer)
-    job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
-
-
-class GameInfo(ORM_BASE):
-    __tablename__ = "games_info"
-    appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-    name = sqlalchemy.Column(sqlalchemy.String)
-    developers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
-    publishers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
-    on_linux = sqlalchemy.Column(sqlalchemy.Boolean)
-    on_mac = sqlalchemy.Column(sqlalchemy.Boolean)
-    on_windows = sqlalchemy.Column(sqlalchemy.Boolean)
-    categories = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
-    genres = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
-    release_date = sqlalchemy.Column(sqlalchemy.String)
-
-
-DB_SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
-DB_SESSION = scoped_session(DB_SESSIONMAKER)
 
 @APP.before_first_request
 def db_init() -> None:
     """Create engine, bind it to sessionmaker, and create tables"""
-    engine = sqlalchemy.create_engine(f"sqlite://{SQLITE_DB_PATH}")
-    DB_SESSIONMAKER.configure(bind=engine)
-    ORM_BASE.metadata.create_all(bind=engine)
+    db.init(f"sqlite://{SQLITE_DB_PATH}")
 
 
 @APP.before_request
 def load_job() -> None:
     job = flask.request.cookies.get("job")
     if job:
-        flask.g.job = DB_SESSION().query(Request).filter(
-            Request.job_uuid == job
+        flask.g.job = db.SESSION().query(db.Request).filter(
+            db.Request.job_uuid == job
         ).first()
     else:
         flask.g.job = None
+
+
+@APP.teardown_request
+def close_db_session(res: Any) -> None:
+    """Close the scoped session during teardown"""
+    db.SESSION().close()
 
 
 @APP.route('/tools/steam-games-exporter/')
@@ -204,8 +159,8 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
         if flask.request.form["include-gameinfo"]:
             exported = export_games_extended(steamid, flask.request.form["format"])
             # did not return file, game info still needs to be fetched
-            if isinstance(exported, Request):
-                db_session = DB_SESSION()
+            if isinstance(exported, db.Request):
+                db_session = db.SESSION()
                 db_session.add(exported)
                 db_session.commit()
                 resp = flask.make_response(exported)
@@ -244,7 +199,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # csv doubly so because of its big file sizes
 
 def export_games_extended(steamid: int, file_format: str
-                         ) -> Union[werkzeug.wrappers.Response, Request, str]:
+                         ) -> Union[werkzeug.wrappers.Response, db.Request, str]:
     """Initiate export, create all necessary db rows, return control to finalize_
     Returns:
         str - error page
@@ -255,7 +210,7 @@ def export_games_extended(steamid: int, file_format: str
     #return finalize_extended_export()
 
 
-def finalize_extended_export(request_job: Request)-> Union[werkzeug.wrappers.Response, str]:
+def finalize_extended_export(request_job: db.Request)-> Union[werkzeug.wrappers.Response, str]:
     """Combine profile json with stored game info.
     Returns:
         str             -> error page / notification about ongoing export
@@ -288,6 +243,7 @@ def export_games_simple(steamid: int, file_format: str
 
     del games_json
     try:
+        #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
         if file_format == "ods":
             tmp = tempfile.NamedTemporaryFile(delete=False)
