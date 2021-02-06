@@ -18,6 +18,7 @@ import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
 import sqlalchemy
+from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 
 #TODO: probably should structure this as a package
@@ -31,6 +32,8 @@ __VERSION__ = "0.1"
 # key.ini mentioned in vassal.ini is a one liner setting environment variable containing dev key
 # not included in the repo for obvious reasons
 STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
+SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
+# if path is not set, use in-memory sqlite db ("sqlite://")
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.ERROR)
@@ -60,13 +63,13 @@ if APP.debug:
 
 # https://partner.steamgames.com/doc/webapi_overview/responses
 KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
-# https://partner.steamgames.com/doc/webapi_overview/responses
-STORE_API = "https://store.steampowered.com/api/appdetails/?appids={appid}"
-# https://developer.valvesoftware.com/wiki/Steam_Web_API
 # https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI#appdetails
-GAMES_API = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?" \
-            "key={key}&steamid={steamid}&format=json&include_appinfo=1"
-
+API_STORE_URL = "https://store.steampowered.com/api/appdetails/?appids={appid}"
+# https://developer.valvesoftware.com/wiki/Steam_Web_API
+API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
+                "?key={key}&steamid={steamid}&format=json&include_appinfo=1"
+API_GAMES_NOINFO_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
+                       "?key={key}&steamid={steamid}&format=json"
 PROFILE_RELEVANT_FIELDS = (
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
@@ -81,11 +84,13 @@ class Request(ORM_BASE):
     games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
     generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
 
+
 class Queue(ORM_BASE):
     __tablename__ = "games_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     appid = sqlalchemy.Column(sqlalchemy.Integer)
     job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
+
 
 class GameInfo(ORM_BASE):
     __tablename__ = "games_info"
@@ -99,6 +104,28 @@ class GameInfo(ORM_BASE):
     categories = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
     genres = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
     release_date = sqlalchemy.Column(sqlalchemy.String)
+
+
+DB_SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
+DB_SESSION = scoped_session(DB_SESSIONMAKER)
+
+@APP.before_first_request
+def db_init() -> None:
+    """Create engine, bind it to sessionmaker, and create tables"""
+    engine = sqlalchemy.create_engine(f"sqlite://{SQLITE_DB_PATH}")
+    DB_SESSIONMAKER.configure(bind=engine)
+    ORM_BASE.metadata.create_all(bind=engine)
+
+
+@APP.before_request
+def load_job() -> None:
+    job = flask.request.cookies.get("job")
+    if job:
+        flask.g.job = DB_SESSION().query(Request).filter(
+            Request.job_uuid == job
+        ).first()
+    else:
+        flask.g.job = None
 
 
 @APP.route('/tools/steam-games-exporter/')
@@ -155,7 +182,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
         steamid = flask.session["steamid"]
         # we don't need steamid anymore, so throw it out
         del flask.session["steamid"]
-        return games_export_simple(steamid, flask.request.form["format"])
+        return export_games_simple(steamid, flask.request.form["format"])
 
     return flask.render_template("export-config.html")
 
@@ -180,12 +207,22 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # xls and csv should not be retained because of their short export times
 # csv doubly so because of its big file sizes
 
-def games_export_extended(steamid: int, file_format: str
+def export_games_extended(steamid: int, file_format: str
                          ) -> Union[werkzeug.wrappers.Response, str]:
+    """Initiate export, create all necessary db rows, return control to finalize_
+    Returns:
+        str - error page or delayed export warning
+        flask response - send exported file
+    """
+    raise NotImplementedError()
+    #return finalize_extended_export()
+
+
+def finalize_extended_export(request_job: Request)-> Union[werkzeug.wrappers.Response, str]:
     raise NotImplementedError()
 
 
-def games_export_simple(steamid: int, file_format: str
+def export_games_simple(steamid: int, file_format: str
                        ) -> Union[werkzeug.wrappers.Response, str]:
     """Simple export without game info"""
     api_session = APISession()
@@ -209,7 +246,7 @@ def games_export_simple(steamid: int, file_format: str
 
     del games_json
     try:
-        tmp: Union [IO[str], IO[bytes]]
+        tmp: Union[IO[str], IO[bytes]]
         if file_format == "ods":
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyods.save_data(tmp, {"GAMES":games})
@@ -256,12 +293,12 @@ class APISession():
 
     def query_store(self, appid: int) -> Optional[dict]:
         raise NotImplementedError()
-        query = requests.Request("GET", STORE_API.format(appid=appid))
+        query = requests.Request("GET", API_STORE_URL.format(appid=appid))
         query = self.requests_session.prepare_request(query)
 
 
     def query_profile(self, steamid: int) -> Optional[dict]:
-        _query = requests.Request("GET", GAMES_API.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
+        _query = requests.Request("GET", API_GAMES_URL.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
         _query = self.requests_session.prepare_request(_query)
 
         games_json = self.query(_query).json()["response"]
