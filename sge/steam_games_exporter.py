@@ -1,3 +1,4 @@
+""""""
 import os
 import csv
 import json
@@ -93,7 +94,7 @@ def load_job() -> None:
 
 
 @APP.teardown_request
-def close_db_session(res: Any) -> None:
+def close_db_session(exc: Any) -> None:
     """Close the scoped session during teardown"""
     db.SESSION().close()
 
@@ -224,15 +225,15 @@ def export_games_simple(steamid: int, file_format: str
     """Simple export without game info"""
     api_session = APISession()
     with api_session as s:
-        games_json = s.query_profile(steamid)
+        profile_json = s.query_profile(steamid)
 
-    if not games_json:
+    if profile_json is None:
         return flask.render_template(
             "login.html",
             error="Cannot export data: this account does not own any games"
         )
 
-    games_json = games_json["games"]
+    games_json = profile_json["games"]
     games = [list(PROFILE_RELEVANT_FIELDS)]
     games[0][0] = "store_url"
     # iterate over the games, extract only relevant fields, replace appid with store link
@@ -241,7 +242,7 @@ def export_games_simple(steamid: int, file_format: str
         game_row[0] = "https://store.steampowered.com/app/{}".format(game_row[0])
         games.append(game_row)
 
-    del games_json
+
     try:
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
@@ -284,6 +285,7 @@ class APISession():
         return self
 
 
+    #type literals available only in python 3.8+
     def __exit__(self, *args: Any, **kwargs: Any) -> False:
         self.requests_session.close()
         return False
@@ -296,10 +298,11 @@ class APISession():
 
 
     def query_profile(self, steamid: int) -> Optional[dict]:
-        _query = requests.Request("GET", API_GAMES_URL.format(key=STEAM_DEV_KEY, steamid=steamid), 0)
-        _query = self.requests_session.prepare_request(_query)
+        _query = requests.Request(
+            "GET", API_GAMES_URL.format(key=STEAM_DEV_KEY, steamid=steamid))
+        prepared_query = self.requests_session.prepare_request(_query)
 
-        games_json = self.query(_query).json()["response"]
+        games_json = self.query(prepared_query, max_retries=0).json()["response"]
         if not games_json:
             return None
         return games_json
