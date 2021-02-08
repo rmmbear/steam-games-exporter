@@ -238,13 +238,74 @@ def export_games_extended(steamid: int, file_format: str
     return finalize_extended_export(new_request)
 
 
-def finalize_extended_export(request_job: db.Request)-> Union[werkzeug.wrappers.Response, str]:
+def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers.Response, str]:
     """Combine profile json with stored game info.
     Returns:
         str             -> error page / notification about ongoing export
         flask response  -> successfully exported and began sending the file
     """
-    raise NotImplementedError()
+    db_session = db.SESSION()
+    missing_ids = db_session.query(db.Queue).filter(
+        db.Queue.job_uuid == request_job.job_uuid
+    ).count()
+
+    if missing_ids:
+        return flask.render_template(
+            "login.html",
+            error="Your request is still being processed. " \
+                 f"Still fetching game info for {missing_ids} games"
+        )
+
+    games_json = json.loads(request_job.games_json)
+    requested_appids = [row["appid"] for row in games_json]
+    _games_info = db_session.request(db.GameInfo).filter(
+        db.GameInfo.appid in requested_appids
+    ).all()
+    del requested_appids
+    #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
+    games_info = {row.appid:row for row in _games_info}
+    combined_games_data = [
+        ["app_id", "name", "developers", "publishers", "on_linux", "on_mac", "on_windows",
+         "categories", "genres", "release_date", "playtime_forever", "playtime_windows_forever",
+         "playtime_mac_forever", "playtime_linux_forever"]
+    ]
+    for json_row in games_json:
+        info = games_info[json_row["appid"]]
+        combined_games_data.append([
+            json_row["appid"], info.name, info.developers, info.publishers, info.on_linux,
+            info.on_mac, info.on_windows, info.categories, info.genres, info.release_date,
+            json_row["playtime_forever"], json_row["playtime_windows_forever"],
+            json_row["playtime_mac_forever"], json_row["playtime_linux_forever"]
+        ])
+
+    file_format = request_job.export_format
+    try:
+        #csv requires file in write mode, rest in binary write
+        tmp: Union[IO[str], IO[bytes]]
+        if file_format == "ods":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyods.save_data(tmp, {"GAMES":combined_games_data})
+        elif file_format == "xls":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyxls.save_data(tmp, {"GAMES":combined_games_data})
+        elif file_format == "xlsx":
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            pyxlsx.save_data(tmp, {"GAMES":combined_games_data})
+        elif file_format == "csv":
+            tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
+            csv_writer = csv.writer(tmp)
+            for row in combined_games_data:
+                csv_writer.writerow(row)
+        else:
+            # this should be caught earlier in the flow, but _just in case_
+            raise ValueError(f"Unknown file format: {file_format}")
+
+        tmp.close()
+        return flask.send_file(
+            tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
+    finally:
+        tmp.close()
+        os.unlink(tmp.name)
 
 
 def export_games_simple(steamid: int, file_format: str
