@@ -162,8 +162,6 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
             # did not return file, game info still needs to be fetched
             if isinstance(exported, db.Request):
                 db_session = db.SESSION()
-                db_session.add(exported)
-                db_session.commit()
                 resp = flask.make_response(exported)
                 resp.set_cookie(
                     "job", value=exported.job_uuid, max_age=COOKIE_MAX_AGE,
