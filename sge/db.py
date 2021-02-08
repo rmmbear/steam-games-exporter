@@ -32,7 +32,8 @@ class Queue(ORM_BASE):
     __tablename__ = "games_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     appid = sqlalchemy.Column(sqlalchemy.Integer)
-    job_type = sqlalchemy.Column(sqlalchemy.String) #api_store / scrape_store
+    scrape = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
+    #^ scrape the info from store instead of using the api
 
 
 class GameInfo(ORM_BASE):
