@@ -204,11 +204,40 @@ def export_games_extended(steamid: int, file_format: str
     """Initiate export, create all necessary db rows, return control to finalize_
     Returns:
         str - error page
-        Request - request object to be committed by caller
+        Request - newly added db.Request row
         flask response - successfully exported and began sending the file
     """
-    raise NotImplementedError()
-    #return finalize_extended_export()
+    with APISession() as s:
+        profile_json = s.query_profile(steamid)
+
+    if not profile_json:
+        return flask.render_template(
+            "login.html",
+            error="Cannot export data: this account does not own any games"
+        )
+
+    games_json = profile_json["games"]
+    new_request = db.Request(games_json, file_format)
+
+    games_ids = {row["appid"] for row in profile_json["games"]}
+    db_session = db.SESSION()
+    available_ids = db_session.query(db.GameInfo.appid).filter(
+        db.GameInfo.appid.in_(games_ids)
+    ).all()
+    missing_ids = games_ids.difference(available_ids)
+    if missing_ids:
+        db_session.add(new_request)
+        queue = []
+        for appid in missing_ids:
+            queue.append(db.Queue(new_request.job_uuid, appid))
+
+        db_session.bulk_save_object(queue)
+        db_session.commit()
+        db_session.close()
+        return new_request
+    #else: all necessary info already present in db, no need to persist the new request
+
+    return finalize_extended_export(new_request)
 
 
 def finalize_extended_export(request_job: db.Request)-> Union[werkzeug.wrappers.Response, str]:
@@ -223,11 +252,10 @@ def finalize_extended_export(request_job: db.Request)-> Union[werkzeug.wrappers.
 def export_games_simple(steamid: int, file_format: str
                        ) -> Union[werkzeug.wrappers.Response, str]:
     """Simple export without game info"""
-    api_session = APISession()
-    with api_session as s:
+    with APISession() as s:
         profile_json = s.query_profile(steamid)
 
-    if profile_json is None:
+    if not profile_json:
         return flask.render_template(
             "login.html",
             error="Cannot export data: this account does not own any games"
@@ -241,7 +269,6 @@ def export_games_simple(steamid: int, file_format: str
         game_row = [raw_row[field] for field in PROFILE_RELEVANT_FIELDS]
         game_row[0] = "https://store.steampowered.com/app/{}".format(game_row[0])
         games.append(game_row)
-
 
     try:
         #csv requires file in write mode, rest in binary write
@@ -285,7 +312,7 @@ class APISession():
         return self
 
 
-    #type literals available only in python 3.8+
+    #type literals available in python 3.8+, we're targeting 3.6+
     def __exit__(self, *args: Any, **kwargs: Any) -> False:
         self.requests_session.close()
         return False
