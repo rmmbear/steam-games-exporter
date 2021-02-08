@@ -1,6 +1,6 @@
 import json
-import uuid
 import time
+import uuid
 
 import sqlalchemy
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -48,6 +48,7 @@ class GameInfo(ORM_BASE):
     categories = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
     genres = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
     release_date = sqlalchemy.Column(sqlalchemy.String)
+    timestamp = sqlalchemy.Column(sqlalchemy.Integer)
 
 
 SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
