@@ -1,11 +1,16 @@
 import os
+import time
 import logging
+import datetime
 from urllib.parse import urlparse
 
 import pytest
-
+import sqlalchemy.orm
+#from sqlalchemy import Session
 os.environ["FLASK_ENV"] = "development"
+os.environ["FLASK_DB_PATH"] = "/:memory:"
 
+from sge import db
 from sge import steam_games_exporter as SGE
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.DEBUG)
@@ -18,6 +23,29 @@ def app_client_fixture():
     app.debug = True
     with app.test_client() as client:
         yield client, app
+
+
+@pytest.fixture
+def db_session_fixture():
+    # all dbs will be created in memory
+    yield db.SESSION()
+    sqlalchemy.orm.close_all_sessions()
+
+
+def generate_fake_game_info(maxid: int, db_session):
+    gameinfo = []
+    for i in range(1, maxid+1):
+        gameinfo.append(
+            db.GameInfo(
+                appid=i, name=f"dummy app {i}", developers=f"dev 1,\ndev 2 for app {i}",
+                publishers=f"publisher 1,\npublisher 2 for app {i}", on_linux=True, on_mac=True,
+                on_windows=False, categories=f"category 1,\ncategory 2 for app {i}",
+                genres=f"genre 1,\ngenre 2 for app {i}",
+                release_date=str(datetime.datetime.fromtimestamp(0)), timestamp=time.time()
+            )
+        )
+    db_session.bulk_save_objects(gameinfo)
+    db_session.commit()
 
 
 def test_routing(app_client_fixture):
@@ -65,3 +93,9 @@ def test_routing(app_client_fixture):
     #TODO: test /tools/steam-games-exporter/export with cookies set
     #TODO: test /tools/steam-games-exporter/export with an invalid steamid
     #TODO: test /tools/steam-games-exporter/export with an invalid export format
+
+
+def test_extended_export(app_client_fixture, db_session_fixture):
+    client = app_client_fixture
+    db_session = db_session_fixture
+    generate_fake_game_info(1000, db_session)
