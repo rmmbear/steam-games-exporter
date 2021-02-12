@@ -7,21 +7,22 @@ import pytest
 os.environ["FLASK_ENV"] = "development"
 
 from sge import steam_games_exporter as SGE
-SGE.APP.config.update(SECRET_KEY="devkey")
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.DEBUG)
 
 @pytest.fixture
 def app_client_fixture():
-    SGE.APP.testing = True
-    SGE.APP.debug = True
-    with SGE.APP.test_client() as client:
-        yield client
+    app = SGE.create_app(SGE.config)
+    app.config.update(SECRET_KEY="devkey")
+    app.testing = True
+    app.debug = True
+    with app.test_client() as client:
+        yield client, app
 
 
 def test_routing(app_client_fixture):
     """"""
-    client = app_client_fixture
+    client, app = app_client_fixture
     # POST to index not allowed
     resp = client.post("/tools/steam-games-exporter/")
     assert resp.status_code == 405
