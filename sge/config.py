@@ -1,7 +1,7 @@
 """Flask app config"""
 import os
 
-APPLICATION_ROOT = "/tools/steam-games-exporter/"
+#APPLICATION_ROOT = "/tools/steam-games-exporter/"
 MAX_CONTENT_LENGTH = 512*1024
 SECRET_KEY = os.urandom(16)
 SERVER_NAME = "misc.untextured.space"

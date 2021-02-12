@@ -6,7 +6,7 @@ import time
 import logging
 import tempfile
 from typing import Any, IO, Optional, Union
-
+from types import ModuleType
 import flask
 import flask_openid
 import werkzeug
@@ -45,44 +45,52 @@ SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.ERROR)
-DEBUG_TOOLBAR = None
 
 FLASK_ENV = os.environ.get("FLASK_ENV")
 if FLASK_ENV == "development":
     config.STATIC_URL_PATH = "/static"
-    del config.APPLICATION_ROOT
+    #del config.APPLICATION_ROOT
     del config.SERVER_NAME
     config.SESSION_COOKIE_SECURE = False
     config.DEBUG = True
     config.TESTING = True
 
+FLASK_DEBUG_TOOLBAR = None
 
+OID = flask_openid.OpenID()
 PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
-APP = flask.Flask(
-    __name__,
-    static_url_path=config.STATIC_URL_PATH,
-    static_folder=os.path.join(PWD, "../static"),
-    template_folder=os.path.join(PWD, "../templates"),
-)
-APP.config.from_object(config)
-OID = flask_openid.OpenID(APP)
-# if available, and in debug mode, import and enable flask debug toolbar
-if APP.debug:
-    try:
-        import flask_debugtoolbar
-        DEBUG_TOOLBAR = flask_debugtoolbar.DebugToolbarExtension(APP)
-        del flask_debugtoolbar
-    except ImportError:
-        pass
+APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 
 
-@APP.before_first_request
+def create_app(app_config: ModuleType) -> flask.Flask:
+    app = flask.Flask(
+        __name__,
+        static_url_path=config.STATIC_URL_PATH, #type: ignore
+        static_folder=os.path.join(PWD, "../static"),
+        template_folder=os.path.join(PWD, "../templates"),
+    )
+    app.config.from_object(app_config)
+    app.register_blueprint(APP_BP)
+    OID.init_app(app)
+
+    # if available, and in debug mode, import and enable flask debug toolbar
+    if app.debug:
+        try:
+            import flask_debugtoolbar
+            debug_toolbar = flask_debugtoolbar.DebugToolbarExtension(app)
+        except ImportError:
+            pass
+
+    return app
+
+
+@APP_BP.before_app_first_request
 def db_init() -> None:
     """Create engine, bind it to sessionmaker, and create tables"""
     db.init(f"sqlite://{SQLITE_DB_PATH}")
 
 
-@APP.before_request
+@APP_BP.before_request
 def load_job() -> None:
     job = flask.request.cookies.get("job")
     if job:
@@ -93,13 +101,13 @@ def load_job() -> None:
         flask.g.job = None
 
 
-@APP.teardown_request
+@APP_BP.teardown_request
 def close_db_session(exc: Any) -> None:
     """Close the scoped session during teardown"""
     db.SESSION().close()
 
 
-@APP.route('/tools/steam-games-exporter/')
+@APP_BP.route("/")
 def index() -> str:
     """landing page"""
     #cookie check
@@ -118,13 +126,13 @@ def index() -> str:
 # and interact with python-openid directly, as much as I hate the concept of
 # "code is documentation" that they're using
 
-@APP.route('/tools/steam-games-exporter/login', methods=['GET', 'POST'])
+@APP_BP.route("/login", methods=['GET', 'POST'])
 @OID.loginhandler
 def login() -> Union[werkzeug.wrappers.Response, str]:
     """Redirect to steam for authentication"""
     cookies = bool(flask.session)
     if "steamid" in flask.session:
-        return flask.redirect(flask.url_for("games_export_config"))
+        return flask.redirect(flask.url_for("sge.games_export_config"))
     if flask.request.method == 'POST' and cookies:
         return OID.try_login("https://steamcommunity.com/openid")
 
@@ -137,17 +145,17 @@ def login() -> Union[werkzeug.wrappers.Response, str]:
 def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Response:
     """called automatically instead of login() after successful authentication"""
     flask.session["steamid"] = resp.identity_url.rsplit("/", maxsplit=1)[-1]
-    return flask.redirect(flask.url_for("games_export_config"))
+    return flask.redirect(flask.url_for("sge.games_export_config"))
 
 
-@APP.route("/tools/steam-games-exporter/export", methods=("GET", "POST"))
+@APP_BP.route("/export", methods=("GET", "POST"))
 def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
     """Display and handle export config"""
     if flask.g.job:
         return finalize_extended_export(flask.g.job)
 
     if "steamid" not in flask.session:
-        return flask.redirect(flask.url_for("index"))
+        return flask.redirect(flask.url_for("sge.index"))
 
     if flask.request.method == "POST":
         if flask.request.form["format"] not in ["ods", "xls", "xlsx", "csv"]:
@@ -229,7 +237,7 @@ def export_games_extended(steamid: int, file_format: str
         for appid in missing_ids:
             queue.append(db.Queue(new_request.job_uuid, appid))
 
-        db_session.bulk_save_object(queue)
+        db_session.bulk_save_objects(queue)
         db_session.commit()
         db_session.close()
         return new_request
@@ -264,6 +272,7 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
     del requested_appids
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
     games_info = {row.appid:row for row in _games_info}
+    # header
     combined_games_data = [
         ["app_id", "name", "developers", "publishers", "on_linux", "on_mac", "on_windows",
          "categories", "genres", "release_date", "playtime_forever", "playtime_windows_forever",
@@ -378,9 +387,12 @@ class APISession():
 
 
     def query_store(self, appid: int) -> Optional[dict]:
-        raise NotImplementedError()
-        query = requests.Request("GET", API_STORE_URL.format(appid=appid))
-        query = self.requests_session.prepare_request(query)
+        _query = requests.Request("GET", API_STORE_URL.format(appid=appid))
+        prepared_query = self.requests_session.prepare_request(_query)
+        store_json = self.query(prepared_query, max_retries=2).json()["response"]
+        if not store_json:
+            return None
+        return store_json
 
 
     def query_profile(self, steamid: int) -> Optional[dict]:
