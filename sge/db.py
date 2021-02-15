@@ -21,7 +21,7 @@ class Request(ORM_BASE):
         if export_format not in ["ods", "xls", "xlsx", "csv"]:
             raise ValueError(f"Export format not recognized {export_format}")
 
-        self.job_uuid = uuid.uuid4()
+        self.job_uuid = str(uuid.uuid4())
         self.timestamp = int(time.time())
         self.games_json = json.dumps(games_json)
         self.export_format = export_format
@@ -30,8 +30,8 @@ class Request(ORM_BASE):
 
 class Queue(ORM_BASE):
     __tablename__ = "games_queue"
-    job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
-    appid = sqlalchemy.Column(sqlalchemy.Integer)
+    appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+    job_uuid = sqlalchemy.Column(sqlalchemy.String)
     scrape = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
     #^ scrape the info from store instead of using the api
 
