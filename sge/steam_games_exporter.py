@@ -41,7 +41,7 @@ PROFILE_RELEVANT_FIELDS = (
 # not included in the repo for obvious reasons
 STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
-# if path is not set, use in-memory sqlite db ("sqlite://")
+# if path is not set, use in-memory sqlite db ("sqlite:///")
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.ERROR)
@@ -87,7 +87,7 @@ def create_app(app_config: ModuleType) -> flask.Flask:
 @APP_BP.before_app_first_request
 def db_init() -> None:
     """Create engine, bind it to sessionmaker, and create tables"""
-    db.init(f"sqlite://{SQLITE_DB_PATH}")
+    db.init(f"sqlite:///{SQLITE_DB_PATH}")
 
 
 @APP_BP.before_request
@@ -104,7 +104,7 @@ def load_job() -> None:
 @APP_BP.teardown_request
 def close_db_session(exc: Any) -> None:
     """Close the scoped session during teardown"""
-    db.SESSION().close()
+    db.SESSION.remove()
 
 
 @APP_BP.route("/")
@@ -166,19 +166,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
         flask.session.clear()
 
         if flask.request.form["include-gameinfo"]:
-            exported = export_games_extended(steamid, flask.request.form["format"])
-            # did not return file, game info still needs to be fetched
-            if isinstance(exported, db.Request):
-                db_session = db.SESSION()
-                resp = flask.make_response(exported)
-                resp.set_cookie(
-                    "job", value=exported.job_uuid, max_age=COOKIE_MAX_AGE,
-                    path="/tools/steam-games-exporter/",
-                    secure=False, httponly=True, samesite="Lax"
-                )
-                return resp
-
-            return exported
+            return export_games_extended(steamid, flask.request.form["format"])
 
         return export_games_simple(steamid, flask.request.form["format"])
 
@@ -206,7 +194,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # csv doubly so because of its big file sizes
 
 def export_games_extended(steamid: int, file_format: str
-                         ) -> Union[werkzeug.wrappers.Response, db.Request, str]:
+                         ) -> Union[werkzeug.wrappers.Response, str]:
     """Initiate export, create all necessary db rows, return control to finalize_
     Returns:
         str - error page
@@ -219,6 +207,7 @@ def export_games_extended(steamid: int, file_format: str
     if not profile_json:
         return flask.render_template(
             "login.html",
+            cookies=True,
             error="Cannot export data: this account does not own any games"
         )
 
@@ -227,20 +216,32 @@ def export_games_extended(steamid: int, file_format: str
 
     games_ids = {row["appid"] for row in profile_json["games"]}
     db_session = db.SESSION()
+
+    #FIXME: prevent "too many SQL variables" error by chunking this query (max=999)
     available_ids = db_session.query(db.GameInfo.appid).filter(
         db.GameInfo.appid.in_(games_ids)
     ).all()
-    missing_ids = games_ids.difference(available_ids)
+    missing_ids = set(games_ids.difference(available_ids))
     if missing_ids:
         db_session.add(new_request)
+        db_session.commit()
         queue = []
         for appid in missing_ids:
-            queue.append(db.Queue(new_request.job_uuid, appid))
+            queue.append(db.Queue(job_uuid=new_request.job_uuid, appid=appid))
 
+        resp = flask.make_response(
+            flask.render_template(
+                "login.html", cookies=True, error="Items added to the queue, return later"),
+            202
+        )
+        resp.set_cookie(
+            "job", value=new_request.job_uuid, max_age=COOKIE_MAX_AGE,
+            path="/tools/steam-games-exporter/",
+            secure=False, httponly=True, samesite="Lax"
+        )
         db_session.bulk_save_objects(queue)
         db_session.commit()
-        db_session.close()
-        return new_request
+        return resp
     #else: all necessary info already present in db, no need to persist the new request
 
     return finalize_extended_export(new_request)
@@ -266,8 +267,9 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
 
     games_json = json.loads(request_job.games_json)
     requested_appids = [row["appid"] for row in games_json]
-    _games_info = db_session.request(db.GameInfo).filter(
-        db.GameInfo.appid in requested_appids
+    #FIXME: prevent "too many SQL variables" error by chunking this query (max=999)
+    _games_info = db_session.query(db.GameInfo).filter(
+        db.GameInfo.appid.in_(requested_appids)
     ).all()
     del requested_appids
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
@@ -287,6 +289,9 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             json_row["playtime_mac_forever"], json_row["playtime_linux_forever"]
         ])
 
+
+    #FIXME: remove satisfied request from db
+    #FIXME: expire job cookie
     file_format = request_job.export_format
     try:
         #csv requires file in write mode, rest in binary write
