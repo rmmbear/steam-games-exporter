@@ -5,8 +5,12 @@ import json
 import time
 import logging
 import tempfile
-from typing import Any, IO, Optional, Union
+import threading
+
 from types import ModuleType
+from typing import Any, IO, Optional, Union
+from urllib.parse import urlparse
+
 import flask
 import flask_openid
 import werkzeug
@@ -29,24 +33,26 @@ API_STORE_URL = "https://store.steampowered.com/api/appdetails/?appids={appid}"
 # https://developer.valvesoftware.com/wiki/Steam_Web_API
 API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
                 "?key={key}&steamid={steamid}&format=json&include_appinfo=1"
-API_GAMES_NOINFO_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
-                       "?key={key}&steamid={steamid}&format=json"
 PROFILE_RELEVANT_FIELDS = (
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
 )
 
 # This is set automatically by emperor (see vassal.ini), has to be set manually in dev env
-# key.ini mentioned in vassal.ini is a one liner setting environment variable containing dev key
+# key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
 # not included in the repo for obvious reasons
 STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
 # if path is not set, use in-memory sqlite db ("sqlite:///")
 
+LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.ERROR)
+LOGGER.setLevel(logging.WARNING)
+
 
 FLASK_ENV = os.environ.get("FLASK_ENV")
+if FLASK_ENV != "development" and not SQLITE_DB_PATH:
+    raise RuntimeError("Running in prod without db path specified")
 if FLASK_ENV == "development":
     config.STATIC_URL_PATH = "/static"
     #del config.APPLICATION_ROOT
@@ -54,12 +60,127 @@ if FLASK_ENV == "development":
     config.SESSION_COOKIE_SECURE = False
     config.DEBUG = True
     config.TESTING = True
+    LOGGER.setLevel(logging.DEBUG)
+    TH = logging.StreamHandler()
+    TH.setLevel(logging.DEBUG)
+    TH.setFormatter(LOG_FORMAT)
+    LOGGER.addHandler(TH)
 
 FLASK_DEBUG_TOOLBAR = None
 
 OID = flask_openid.OpenID()
 PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
+GAME_INFO_FETCHER = None
+
+
+class GameInfoFetcher(threading.Thread):
+    """Background thread for processing db.Queue.
+    """
+    def __init__(self) -> None:
+        super().__init__(target=None, name="store_info_fetcher", daemon=False)
+        self.condition = threading.Condition()
+        self._terminate = threading.Event()
+        self.rate_limited = False
+
+        def shutdown_notify(fetcher_thread: "GameInfoFetcher") -> None:
+            # wait until main thread stops execution
+            threading.main_thread().join()
+            # trigger termination event and wake our thread
+            LOGGER.info("Terminating fetcher thread")
+            fetcher_thread._terminate.set()
+            fetcher_thread.notify(force=True)
+
+        self.shutdown_notifier = threading.Thread(
+            target=shutdown_notify, args=(self,), daemon=False
+        )
+
+
+    def _wait(self, timeout: Optional[int] = None, rate_limited: bool = False) -> None:
+        LOGGER.debug("Fetcher thread waiting. timeout=%s, rate_limited=%s", timeout, rate_limited)
+        if not timeout and rate_limited:
+            raise ValueError("Timeout must be specified when rate_limit is True")
+        try:
+
+            self.condition.acquire()
+            self.rate_limited = rate_limited
+            self.condition.wait(timeout)
+        finally:
+            self.condition.release()
+            self.rate_limited = False
+            LOGGER.debug("Fetcher thread waking up")
+
+
+    def notify(self, force: bool = False) -> None:
+        """Wake the thread to resume queue processing
+        set force to True to force
+        """
+        if not self.rate_limited or (force and self.rate_limited):
+            try:
+                self.condition.acquire()
+                self.condition.notify_all()
+            finally:
+                self.condition.release()
+        #else: we're rate limited, do not wake up, will wake up automatically later
+
+
+    def run(self) -> None:
+        """Continuously fetch game info until main thread stops."""
+        LOGGER.info("Fetcher thread started")
+        db_session = db.SESSION()
+        # 20 items = 30 seconds (at minumum) at 1.5s delay between requests
+        queue_query = db_session.query(db.Queue).order_by(db.Queue.timestamp).limit(20)
+        LOGGER.info("Starting shutdown notifier")
+        self.shutdown_notifier.start()
+        with APISession() as api_session:
+            while True:
+                if self._terminate.is_set():
+                    db.SESSION.remove()
+                    LOGGER.info("Terminating fetcher thread (idle)")
+                    return
+
+                queue_batch = queue_query.all()
+                if not queue_batch:
+                    LOGGER.debug("Nothing in the queue, waiting")
+                    self._wait()
+                    continue
+
+                for queue_item in queue_batch:
+                    if self._terminate.is_set():
+                        db.SESSION.remove()
+                        LOGGER.info("Terminating fetcher thread (processing)")
+                        return
+
+                    app_already_known = db_session.query(db.GameInfo).filter(
+                        db.GameInfo.appid == int(queue_item.appid)
+                    ).exists()
+                    if not db_session.query(app_already_known).scalar():
+                        try:
+                            game_info = api_session.query_store(queue_item.appid)
+                            LOGGER.info("Adding app to db: %s", game_info)
+                            db_session.add(game_info)
+                        except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as exc:
+                            LOGGER.warning("Network error: %s", exc)
+                            #FIXME: detect when we're getting rate limited
+                            # if isinstance(exc, requests.HTTPError) and exc.status_code == 429:
+                            #   self.wait(timeout=rate_limited_until, rate_limited=True)
+                            # else:
+                            self._wait(10, rate_limited=True)
+                            continue
+                        except Exception as exc:
+                            LOGGER.exception("Ignoring exception:")
+                            db_session.rollback()
+                            # move item to the bottom of the stack
+                            queue_item.timestamp = int(time.time())
+                            db_session.commit()
+                            self._wait(10, rate_limited=True)
+                            continue
+                    else:
+                        LOGGER.warning("encountered queue item for an already known app (%s)",
+                                       queue_item.appid)
+
+                    db_session.delete(queue_item)
+                    db_session.commit()
 
 
 def create_app(app_config: ModuleType) -> flask.Flask:
@@ -77,9 +198,14 @@ def create_app(app_config: ModuleType) -> flask.Flask:
     if app.debug:
         try:
             import flask_debugtoolbar
-            debug_toolbar = flask_debugtoolbar.DebugToolbarExtension(app)
+            global FLASK_DEBUG_TOOLBAR
+            FLASK_DEBUG_TOOLBAR = flask_debugtoolbar.DebugToolbarExtension(app)
         except ImportError:
             pass
+
+    db.init(SQLITE_DB_PATH)
+    global GAME_INFO_FETCHER
+    GAME_INFO_FETCHER = GameInfoFetcher()
 
     return app
 
@@ -87,11 +213,16 @@ def create_app(app_config: ModuleType) -> flask.Flask:
 @APP_BP.before_app_first_request
 def db_init() -> None:
     """Create engine, bind it to sessionmaker, and create tables"""
-    db.init(f"sqlite:///{SQLITE_DB_PATH}")
+    LOGGER.debug("Received first request")
+    LOGGER.info("Initializing db")
+    db.init(SQLITE_DB_PATH)
+    if GAME_INFO_FETCHER:
+        GAME_INFO_FETCHER.start()
 
 
 @APP_BP.before_request
 def load_job() -> None:
+    LOGGER.debug("Received request")
     job = flask.request.cookies.get("job")
     if job:
         flask.g.job = db.SESSION().query(db.Request).filter(
@@ -101,9 +232,20 @@ def load_job() -> None:
         flask.g.job = None
 
 
+@APP_BP.after_request
+def notify_fetcher(resp: Any) -> None:
+    if "queue_modified" in flask.g:
+        if GAME_INFO_FETCHER:
+            LOGGER.info("Notifying fetcher thread of modified queue ")
+            GAME_INFO_FETCHER.notify()
+
+    return resp
+
+
 @APP_BP.teardown_request
 def close_db_session(exc: Any) -> None:
     """Close the scoped session during teardown"""
+    LOGGER.info("Request teardown")
     db.SESSION.remove()
 
 
@@ -224,10 +366,10 @@ def export_games_extended(steamid: int, file_format: str
     missing_ids = set(games_ids.difference(available_ids))
     if missing_ids:
         db_session.add(new_request)
-        db_session.commit()
         queue = []
         for appid in missing_ids:
-            queue.append(db.Queue(job_uuid=new_request.job_uuid, appid=appid))
+            queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
+                                  timestamp=int(time.time())))
 
         resp = flask.make_response(
             flask.render_template(
@@ -241,6 +383,7 @@ def export_games_extended(steamid: int, file_format: str
         )
         db_session.bulk_save_objects(queue)
         db_session.commit()
+        flask.g.queue_modified = True
         return resp
     #else: all necessary info already present in db, no need to persist the new request
 
@@ -288,7 +431,6 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             json_row["playtime_forever"], json_row["playtime_windows_forever"],
             json_row["playtime_mac_forever"], json_row["playtime_linux_forever"]
         ])
-
 
     #FIXME: remove satisfied request from db
     #FIXME: expire job cookie
@@ -375,10 +517,12 @@ def export_games_simple(steamid: int, file_format: str
 class APISession():
     """Simple context manager taking advantage of connection pooling"""
     user_agent = f"SteamGamesFetcher/{__VERSION__} (+https://github.com/rmmbear)"
+    STORE_DELAY = 1.5
 
     def __init__(self) -> None:
         self.requests_session = requests.Session()
         self.requests_session.headers["User-Agent"] = self.user_agent
+        self.last_store_access = .0
 
 
     def __enter__(self) -> "APISession":
@@ -391,13 +535,16 @@ class APISession():
         return False
 
 
-    def query_store(self, appid: int) -> Optional[dict]:
+    def query_store(self, appid: int) -> db.GameInfo:
         _query = requests.Request("GET", API_STORE_URL.format(appid=appid))
         prepared_query = self.requests_session.prepare_request(_query)
-        store_json = self.query(prepared_query, max_retries=2).json()["response"]
-        if not store_json:
-            return None
-        return store_json
+        store_json = self.query(prepared_query, max_retries=2).json()[str(appid)]
+
+        if not store_json["success"]:
+            LOGGER.warning("Invalid appid or app not available from our region: (%s)", appid)
+            return db.GameInfo(appid=appid, timestamp=int(time.time()), unavailable=True)
+
+        return db.GameInfo.from_json(appid=appid, info_json=store_json["data"])
 
 
     def query_profile(self, steamid: int) -> Optional[dict]:
@@ -418,11 +565,16 @@ class APISession():
         retry_count = 0
         while True:
             try:
+                #FIXME: apply this only to requests to store api
+                # this doesn't really matter because we only make one request to the profile
+                # endpoint, but this should be fixed regardless
+                time.sleep(max(0, self.STORE_DELAY + self.last_store_access - time.time()))
+                self.last_store_access = time.time()
                 response = self.requests_session.send(prepared_query, stream=True, timeout=15)
                 response.raise_for_status()
                 return response
             except requests.HTTPError:
-                LOGGER.info("Received HTTP error code %s", response.status_code)
+                LOGGER.warning("Received HTTP error code %s", response.status_code)
                 if response.status_code not in KNOWN_API_RESPONSES:
                     LOGGER.error("Unexpected API response (%s), contents:\n%s",
                                  response.status_code, response.content)
@@ -438,10 +590,12 @@ class APISession():
                 LOGGER.error("Could not establish a new connection")
                 raise
             except Exception as err:
-                LOGGER.error("Unexpected request exception")
-                LOGGER.error("request url = %s", prepared_query.url)
-                LOGGER.error("request method = %s", prepared_query.method)
-                LOGGER.error("request headers = %s", prepared_query.headers)
+                LOGGER.exception(
+                    "Unexpected request exception: %s" \
+                    "\nrequest url = %s" \
+                    "\nrequest headers = %s",
+                    err, urlparse(prepared_query.url).netloc, prepared_query.headers
+                )
                 raise err
 
             retry_count += 1
