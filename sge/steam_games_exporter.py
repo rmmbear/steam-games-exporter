@@ -101,7 +101,6 @@ class GameInfoFetcher(threading.Thread):
         if not timeout and rate_limited:
             raise ValueError("Timeout must be specified when rate_limit is True")
         try:
-
             self.condition.acquire()
             self.rate_limited = rate_limited
             self.condition.wait(timeout)
@@ -128,7 +127,7 @@ class GameInfoFetcher(threading.Thread):
         """Continuously fetch game info until main thread stops."""
         LOGGER.info("Fetcher thread started")
         db_session = db.SESSION()
-        # 20 items = 30 seconds (at minumum) at 1.5s delay between requests
+        # 20 items = 30 seconds (at minimum) at 1.5s delay between requests
         queue_query = db_session.query(db.Queue).order_by(db.Queue.timestamp).limit(20)
         LOGGER.info("Starting shutdown notifier")
         self.shutdown_notifier.start()
@@ -262,25 +261,33 @@ def index() -> str:
 # KeyError: ('http://specs.openid.net/auth/2.0', 'assoc_type')
 # this does not seem to cause any issues down the line
 # this exact same issue: https://github.com/mitsuhiko/flask-openid/issues/48
-#FIXME: openid discovery performed in login regardless of context
-# i.e. a request to https://steamcommunity.com/openid/login is made each time login() is called
-# with these two issues in mind, I think it would make the most sense to ditch flask-openid
-# and interact with python-openid directly, as much as I hate the concept of
-# "code is documentation" that they're using
+
 
 @APP_BP.route("/login", methods=['GET', 'POST'])
-@OID.loginhandler
-def login() -> Union[werkzeug.wrappers.Response, str]:
-    """Redirect to steam for authentication"""
+def login_router() -> Union[werkzeug.wrappers.Response, str]:
+    LOGGER.debug("In login router")
+    openid_complete = flask.request.args.get("openid_complete")
+    if openid_complete:
+        return login()
+
     cookies = bool(flask.session)
+    if flask.g.job:
+        return finalize_extended_export(flask.g.job)
     if "steamid" in flask.session:
         return flask.redirect(flask.url_for("sge.games_export_config"))
     if flask.request.method == 'POST' and cookies:
-        return OID.try_login("https://steamcommunity.com/openid")
+        return login()
 
     # this should only be displayed in case of errors
     # lack of cookies is an error
     return flask.render_template("login.html", cookies=cookies, error=OID.fetch_error())
+
+
+@OID.loginhandler
+def login() -> Union[werkzeug.wrappers.Response, str]:
+    """Redirect to steam for authentication"""
+    LOGGER.debug("In OID login")
+    return OID.try_login("https://steamcommunity.com/openid")
 
 
 @OID.after_login
