@@ -73,6 +73,7 @@ PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 GAME_INFO_FETCHER = None
 
+#FIXME: remove old jobs from db.Requests (older than COOKIE_MAX_AGE)
 
 class GameInfoFetcher(threading.Thread):
     """Background thread for processing db.Queue.
@@ -144,6 +145,7 @@ class GameInfoFetcher(threading.Thread):
                     self._wait()
                     continue
 
+                LOGGER.debug("Processing batch")
                 for queue_item in queue_batch:
                     if self._terminate.is_set():
                         db.SESSION.remove()
@@ -222,14 +224,14 @@ def db_init() -> None:
 @APP_BP.before_request
 def load_job() -> None:
     LOGGER.debug("Received request")
-    job = flask.request.cookies.get("job")
-    if job:
-        flask.g.job = db.SESSION().query(db.Request).filter(
-            db.Request.job_uuid == job
+    job_uuid = flask.request.cookies.get("job")
+    if job_uuid:
+        job_db_row = db.SESSION().query(db.Request).filter(
+            db.Request.job_uuid == job_uuid
         ).first()
-    else:
-        flask.g.job = None
-
+        if job_db_row:
+            flask.g.job_db_row = job_db_row
+        #FIXME: clear invalid job cookies
 
 @APP_BP.after_request
 def notify_fetcher(resp: Any) -> None:
@@ -262,7 +264,6 @@ def index() -> str:
 # this does not seem to cause any issues down the line
 # this exact same issue: https://github.com/mitsuhiko/flask-openid/issues/48
 
-
 @APP_BP.route("/login", methods=['GET', 'POST'])
 def login_router() -> Union[werkzeug.wrappers.Response, str]:
     LOGGER.debug("In login router")
@@ -270,11 +271,12 @@ def login_router() -> Union[werkzeug.wrappers.Response, str]:
     if openid_complete:
         return login()
 
-    cookies = bool(flask.session)
-    if flask.g.job:
-        return finalize_extended_export(flask.g.job)
+    if "job_db_row" in flask.g:
+        return finalize_extended_export(flask.g.job_db_row)
     if "steamid" in flask.session:
         return flask.redirect(flask.url_for("sge.games_export_config"))
+
+    cookies = bool(flask.session)
     if flask.request.method == 'POST' and cookies:
         return login()
 
@@ -300,8 +302,8 @@ def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Respo
 @APP_BP.route("/export", methods=("GET", "POST"))
 def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
     """Display and handle export config"""
-    if flask.g.job:
-        return finalize_extended_export(flask.g.job)
+    if "job_db_row" in flask.g:
+        return finalize_extended_export(flask.g.job_db_row)
 
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("sge.index"))
@@ -314,7 +316,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
         # we don't need steamid anymore, so throw it out
         flask.session.clear()
 
-        if flask.request.form["include-gameinfo"]:
+        if flask.request.form.get("include-gameinfo"):
             return export_games_extended(steamid, flask.request.form["format"])
 
         return export_games_simple(steamid, flask.request.form["format"])
@@ -411,6 +413,7 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
     if missing_ids:
         return flask.render_template(
             "login.html",
+            cookies=True,
             error="Your request is still being processed. " \
                  f"Still fetching game info for {missing_ids} games"
         )
@@ -439,8 +442,6 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             json_row["playtime_mac_forever"], json_row["playtime_linux_forever"]
         ])
 
-    #FIXME: remove satisfied request from db
-    #FIXME: expire job cookie
     file_format = request_job.export_format
     try:
         #csv requires file in write mode, rest in binary write
@@ -464,8 +465,14 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             raise ValueError(f"Unknown file format: {file_format}")
 
         tmp.close()
-        return flask.send_file(
+        db_session.delete(flask.g.job_db_row)
+        db_session.commit()
+
+        file_response = flask.send_file(
             tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
+        file_response.set_cookie("job", "", expires=0, path="/tools/steam-games-exporter/",
+                                 secure=False, httponly=True, samesite="Lax")
+        return file_response
     finally:
         tmp.close()
         os.unlink(tmp.name)
@@ -480,6 +487,7 @@ def export_games_simple(steamid: int, file_format: str
     if not profile_json:
         return flask.render_template(
             "login.html",
+            cookies=True,
             error="Cannot export data: this account does not own any games"
         )
 
