@@ -87,7 +87,7 @@ class DummyAPISession(SGE.APISession):
         response.encoding = "utf-8"
         response._content = content
         response._content_consumed = True
-        response.status_code = 200
+        response.status_code = 2000
         response.reason = "OK"
         return response
 
@@ -107,6 +107,23 @@ class DummyAPISession(SGE.APISession):
         """"""
         return JSON_TEMPLATE_GAMEINFO % (appid, f"App {appid}", appid)
 
+
+
+def generate_fake_game_info(maxid: int, db_session):
+    LOGGER.debug("Generating %s fake game entries", maxid)
+    gameinfo = []
+    for i in range(1, maxid+1):
+        gameinfo.append(
+            db.GameInfo(
+                appid=i, name=f"dummy app {i}", developers=f"dev 1,\ndev 2 for app {i}",
+                publishers=f"publisher 1,\npublisher 2 for app {i}", on_linux=True, on_mac=True,
+                on_windows=False, categories=f"category 1,\ncategory 2 for app {i}",
+                genres=f"genre 1,\ngenre 2 for app {i}",
+                release_date=str(datetime.datetime.fromtimestamp(0)), timestamp=int(time.time())
+            )
+        )
+    db_session.bulk_save_objects(gameinfo)
+    db_session.commit()
 
 
 @pytest.fixture
