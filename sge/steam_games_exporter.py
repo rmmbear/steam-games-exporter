@@ -25,18 +25,28 @@ from sge import config, db
 
 __VERSION__ = "0.1"
 
-COOKIE_MAX_AGE = 86400 # 1 day
+COOKIE_MAX_AGE = 172800 # 2 days
 # https://partner.steamgames.com/doc/webapi_overview/responses
 KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
 # https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI#appdetails
 API_STORE_URL = "https://store.steampowered.com/api/appdetails/?appids={appid}"
 # https://developer.valvesoftware.com/wiki/Steam_Web_API
 API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/" \
-                "?key={key}&steamid={steamid}&format=json&include_appinfo=1"
-PROFILE_RELEVANT_FIELDS = (
+                "?format=json&include_appinfo=1&include_played_free_games=1" \
+                "&key={key}&steamid={steamid}"
+# despite what the resources on this endpoint say, free games are included in the response
+# even with include_played_free_games=0
+# so instead let's pretend this is what we wanted
+
+PROFILE_RELEVANT_FIELDS = [
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
-)
+]
+GAMEINFO_RELEVANT_FIELDS = [
+    c.key for c in db.GameInfo.__table__.columns if c.key not in ["name", "appid",
+                                                                  "timestamp", "unavailable"]
+]
+
 
 # This is set automatically by emperor (see vassal.ini), has to be set manually in dev env
 # key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
@@ -113,7 +123,6 @@ class GameInfoFetcher(threading.Thread):
 
     def notify(self, force: bool = False) -> None:
         """Wake the thread to resume queue processing
-        set force to True to force
         """
         if not self.rate_limited or (force and self.rate_limited):
             try:
@@ -328,6 +337,8 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 #    {"<appid>": {"success": False}}
 # afaik there is no workaround for this (without using a proxy of some kind)
 # these titles must be queried from regions in which they are available
+# this is also true for titles that have been removed from the store
+# there is no way to distinguish between hidden and removed titles
 
 #Notes on formats:
 # based on artificial tests with random and static data
@@ -339,8 +350,8 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # based on this, my conclusion is that saving generated files
 # is not necessary - majority of users will most likely have
 # between 100 - 1000 items in their steam library, export times
-# for this range are reasonable even for ods. Exception could be
-# made fot larger collections, but only for xlsx and ods
+# for this range are reasonable even for ods. Exceptions could be
+# made for larger collections, but only for xlsx and ods
 # xls and csv should not be retained because of their short export times
 # csv doubly so because of its big file sizes
 
@@ -372,6 +383,7 @@ def export_games_extended(steamid: int, file_format: str
     available_ids = db_session.query(db.GameInfo.appid).filter(
         db.GameInfo.appid.in_(games_ids)
     ).all()
+    #FIXME: all ids are queried
     missing_ids = set(games_ids.difference(available_ids))
     if missing_ids:
         db_session.add(new_request)
@@ -427,26 +439,27 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
     del requested_appids
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
     games_info = {row.appid:row for row in _games_info}
-    # header
-    combined_games_data = [
-        ["app_id", "name", "developers", "publishers", "on_linux", "on_mac", "on_windows",
-         "categories", "genres", "release_date", "playtime_forever", "playtime_windows_forever",
-         "playtime_mac_forever", "playtime_linux_forever"]
-    ]
+
+    # first row contains headers
+    combined_games_data = [PROFILE_RELEVANT_FIELDS + GAMEINFO_RELEVANT_FIELDS]
     for json_row in games_json:
         info = games_info[json_row["appid"]]
-        combined_games_data.append([
-            json_row["appid"], info.name, info.developers, info.publishers, info.on_linux,
-            info.on_mac, info.on_windows, info.categories, info.genres, info.release_date,
-            json_row["playtime_forever"], json_row["playtime_windows_forever"],
-            json_row["playtime_mac_forever"], json_row["playtime_linux_forever"]
-        ])
+        data = [json_row[field] for field in PROFILE_RELEVANT_FIELDS]
+        data.extend([getattr(info, field) for field in GAMEINFO_RELEVANT_FIELDS])
+        combined_games_data.append(data)
+
+    del games_json, games_info
 
     file_format = request_job.export_format
     try:
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
         if file_format == "ods":
+            #FIXME: ods chokes on Nones in GameInfo table
+            # site-packages/pyexcel_ods3/odsw.py", line 38, in write_row
+            #   value_type = service.ODS_WRITE_FORMAT_COVERSION[type(cell)]
+            # KeyError: <class 'NoneType'>
+            # so much for the "don't worry about the format" part, eh?
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyods.save_data(tmp, {"GAMES":combined_games_data})
         elif file_format == "xls":
