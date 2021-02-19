@@ -47,8 +47,10 @@ class GameInfo(ORM_BASE):
     __tablename__ = "games_info"
     appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     name = sqlalchemy.Column(sqlalchemy.String)
+    type = sqlalchemy.Column(sqlalchemy.String)
     developers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
     publishers = sqlalchemy.Column(sqlalchemy.String) #(csv, sep=",\n")
+    is_free = sqlalchemy.Column(sqlalchemy.Boolean)
     on_linux = sqlalchemy.Column(sqlalchemy.Boolean)
     on_mac = sqlalchemy.Column(sqlalchemy.Boolean)
     on_windows = sqlalchemy.Column(sqlalchemy.Boolean)
@@ -64,13 +66,13 @@ class GameInfo(ORM_BASE):
     timestamp = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
     unavailable = sqlalchemy.Column(sqlalchemy.Boolean, nullable=False, default=False)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<GameInfo(appid='{}', name='{}', ... timestamp='{}', unavailable='{}')>".format(
             self.appid, self.name, self.timestamp, self.unavailable
         )
 
     @classmethod
-    def from_json(cls,appid: int, info_json: dict) -> None:
+    def from_json(cls, appid: int, info_json: dict) -> "GameInfo":
         #{'<appid>': {'success': <bool>, 'data': {'steam_appid':<steam_appid>, ...}}}
         # info_json = json['<appid>']['data']
         #NOTE: steam_appid and appid are not guaranteed to be the same
@@ -78,13 +80,15 @@ class GameInfo(ORM_BASE):
         # (for example, a single-player game can have a multi-player mode as a deparate app)
         # (this app's steam_appid will actually be the main app's appid)
         # (I assume this is to make it possible to have both apps have the same store page)
-        appid = appid
+        #appid = appid
         name = info_json["name"]
+        type = info_json["type"]
         if "developers" in info_json:
             developers = ",\n".join(info_json["developers"])
         else:
-            developers = "N/A"
+            developers = None
         publishers = ",\n".join(info_json["publishers"])
+        is_free = info_json["is_free"]
         on_linux = info_json["platforms"]["linux"]
         on_mac = info_json["platforms"]["mac"]
         on_windows = info_json["platforms"]["windows"]
@@ -96,11 +100,11 @@ class GameInfo(ORM_BASE):
             categories = ",\n".join(
                 [category["description"] for category in info_json["categories"]])
         else:
-            categories = "N/A"
+            categories = None
         if "genres" in info_json:
             genres = ",\n".join(genre["description"] for genre in info_json["genres"])
         else:
-            genres = "N/A"
+            genres = None
         release_date = info_json["release_date"]["date"]
         timestamp = int(time.time())
         unavailable = False
@@ -109,7 +113,6 @@ class GameInfo(ORM_BASE):
         del kwargs["cls"], kwargs["info_json"]
         new_obj = cls(**kwargs)
         return new_obj
-
 
 
 SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
