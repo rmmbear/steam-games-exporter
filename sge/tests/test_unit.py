@@ -1,7 +1,6 @@
 import os
 import time
 import logging
-import datetime
 
 from typing import Dict
 from urllib.parse import urlparse
@@ -43,6 +42,7 @@ JSON_TEMPLATE_GAMEINFO = """{
             "name": "%s",
             "steam_appid": %d,
             "required_age": 0,
+            "is_free": false,
             "controller_support": "full",
             "supported_languages": "English<strong>*</strong>, French, Spanish - Spain, Korean<br><strong>*</strong>languages with full audio support",
             "developers": ["developer 1", "developer2"],
@@ -113,15 +113,8 @@ def generate_fake_game_info(maxid: int, db_session):
     LOGGER.debug("Generating %s fake game entries", maxid)
     gameinfo = []
     for i in range(1, maxid+1):
-        gameinfo.append(
-            db.GameInfo(
-                appid=i, name=f"dummy app {i}", developers=f"dev 1,\ndev 2 for app {i}",
-                publishers=f"publisher 1,\npublisher 2 for app {i}", on_linux=True, on_mac=True,
-                on_windows=False, categories=f"category 1,\ncategory 2 for app {i}",
-                genres=f"genre 1,\ngenre 2 for app {i}",
-                release_date=str(datetime.datetime.fromtimestamp(0)), timestamp=int(time.time())
-            )
-        )
+        gameinfo.append(db.GameInfo(appid=i, timestamp=int(time.time()), unavailable=True))
+
     db_session.bulk_save_objects(gameinfo)
     db_session.commit()
 
