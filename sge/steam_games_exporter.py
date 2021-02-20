@@ -59,7 +59,7 @@ LOG_FORMAT = logging.Formatter("[%(levelname)s] [SGE] %(message)s")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 TH = logging.StreamHandler()
-TH.setLevel(logging.INFO)
+TH.setLevel(logging.WARNING)
 TH.setFormatter(LOG_FORMAT)
 LOGGER.addHandler(TH)
 
