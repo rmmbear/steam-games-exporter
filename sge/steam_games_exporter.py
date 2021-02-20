@@ -346,7 +346,7 @@ def login_router() -> werkzeug.wrappers.Response:
     # this should only be displayed in case of errors
     # lack of cookies is an error
     return flask.make_response(
-        flask.render_template("login.html", no_cookies=not(cookies), error=OID.fetch_error()), 404)
+        flask.render_template("error.html", no_cookies=not(cookies), error=OID.fetch_error()), 404)
 
 
 @OID.loginhandler
@@ -428,7 +428,7 @@ def export_games_extended(steamid: int, file_format: str
     if not profile_json:
         resp = flask.make_response(
             flask.render_template(
-                "login.html",
+                "error.html",
                 error="Cannot export data: this account does not own any games"),
             404
         )
@@ -455,7 +455,7 @@ def export_games_extended(steamid: int, file_format: str
 
         resp = flask.make_response(
             flask.render_template(
-                "login.html", error="Items added to the queue, return later"),
+                "error.html", error="Items added to the queue, return later"),
             202
         )
         resp.set_cookie(
@@ -487,7 +487,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         resp = flask.make_response(
             flask.render_template(
-                "login.html",
+                "error.html",
                 error="Your request is still being processed. " \
                      f"Still fetching game info for {missing_ids} games"),
             202
@@ -568,7 +568,7 @@ def export_games_simple(steamid: int, file_format: str
     if not profile_json:
         resp = flask.make_response(
             flask.render_template(
-                "login.html",
+                "error.html",
                 error="Cannot export data: this account does not own any games"),
             404
         )
