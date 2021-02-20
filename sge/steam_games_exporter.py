@@ -101,14 +101,15 @@ ENV_TO_CONFIG = {
 }
 
 
-if FLASK_ENV != "development" and not SQLITE_DB_PATH:
+if FLASK_ENV == "production" and not SQLITE_DB_PATH:
     raise RuntimeError("Running in prod without db path specified")
 
-if FLASK_ENV != "development":
+if FLASK_ENV != "production":
     TH = logging.StreamHandler()
     TH.setLevel(logging.DEBUG)
     TH.setFormatter(LOG_FORMAT)
     LOGGER.addHandler(TH)
+    LOGGER.setLevel(logging.DEBUG)
 else:
     ...
     #TODO: configure server-side logging
@@ -307,7 +308,7 @@ def finalize_request(resp: Any) -> None:
 @APP_BP.teardown_request
 def close_db_session(exc: Any) -> None:
     """Close the scoped session during teardown"""
-    LOGGER.info("Request teardown")
+    LOGGER.debug("Request teardown")
     db.SESSION.remove()
 
 
@@ -345,7 +346,7 @@ def login_router() -> werkzeug.wrappers.Response:
     # this should only be displayed in case of errors
     # lack of cookies is an error
     return flask.make_response(
-        flask.render_template("login.html", cookies=cookies, error=OID.fetch_error()), 404)
+        flask.render_template("login.html", no_cookies=not(cookies), error=OID.fetch_error()), 404)
 
 
 @OID.loginhandler
@@ -426,7 +427,7 @@ def export_games_extended(steamid: int, file_format: str
     if not profile_json:
         resp = flask.make_response(
             flask.render_template(
-                "login.html", cookies=True,
+                "login.html",
                 error="Cannot export data: this account does not own any games"),
             404
         )
@@ -453,7 +454,7 @@ def export_games_extended(steamid: int, file_format: str
 
         resp = flask.make_response(
             flask.render_template(
-                "login.html", cookies=True, error="Items added to the queue, return later"),
+                "login.html", error="Items added to the queue, return later"),
             202
         )
         resp.set_cookie(
@@ -486,7 +487,6 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         resp = flask.make_response(
             flask.render_template(
                 "login.html",
-                cookies=True,
                 error="Your request is still being processed. " \
                      f"Still fetching game info for {missing_ids} games"),
             202
@@ -566,7 +566,6 @@ def export_games_simple(steamid: int, file_format: str
         resp = flask.make_response(
             flask.render_template(
                 "login.html",
-                cookies=True,
                 error="Cannot export data: this account does not own any games"),
             404
         )
