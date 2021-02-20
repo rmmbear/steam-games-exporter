@@ -55,7 +55,7 @@ SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
 STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 # if path is not set, use in-memory sqlite db ("sqlite:///")
 
-LOG_FORMAT = logging.Formatter("[%(levelname)s] [SGE] %(message)s")
+LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 TH = logging.StreamHandler()
@@ -534,7 +534,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
             pyxlsx.save_data(tmp, {"GAMES":combined_games_data})
         elif file_format == "csv":
             tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
-            csv_writer = csv.writer(tmp)
+            csv_writer = csv.writer(tmp, dialect="excel-tab")
             for row in combined_games_data:
                 csv_writer.writerow(row)
         else:
@@ -594,7 +594,7 @@ def export_games_simple(steamid: int, file_format: str
             pyxlsx.save_data(tmp, {"GAMES":games})
         elif file_format == "csv":
             tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
-            csv_writer = csv.writer(tmp)
+            csv_writer = csv.writer(tmp, dialect="excel-tab")
             for row in games:
                 csv_writer.writerow(row)
         else:
