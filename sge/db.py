@@ -17,8 +17,8 @@ ORM_BASE: DeclarativeMeta = declarative_base()
 class Request(ORM_BASE):
     __tablename__ = "requests_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
-    timestamp = sqlalchemy.Column(sqlalchemy.Integer)
-    games_json = sqlalchemy.Column(sqlalchemy.String, nullable=True)
+    timestamp = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
+    games_json = sqlalchemy.Column(sqlalchemy.String, nullable=False)
     export_format = sqlalchemy.Column(sqlalchemy.String)
     generated_file = sqlalchemy.Column(sqlalchemy.String, nullable=True)
 
