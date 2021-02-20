@@ -164,7 +164,7 @@ def test_routing(app_client_fixture, db_session_fixture):
     # POST: user is not redirected (so an error message can be shown) when cookies are missing
     client.cookie_jar.clear()
     resp = client.post("/tools/steam-games-exporter/login")
-    assert resp.status_code == 200
+    assert resp.status_code == 404
     assert not client.cookie_jar
     assert not resp.headers.get("Location")
 
