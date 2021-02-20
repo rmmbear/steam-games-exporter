@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+# ~ import http.cookiejar
 
 from typing import Dict
 from urllib.parse import urlparse
@@ -9,7 +10,7 @@ import pytest
 import requests
 import sqlalchemy.orm
 #from sqlalchemy import Session
-os.environ["FLASK_ENV"] = "development"
+os.environ["FLASK_ENV"] = "testing"
 
 from sge import db
 from sge import steam_games_exporter as SGE
@@ -87,7 +88,7 @@ class DummyAPISession(SGE.APISession):
         response.encoding = "utf-8"
         response._content = content
         response._content_consumed = True
-        response.status_code = 2000
+        response.status_code = 200
         response.reason = "OK"
         return response
 
@@ -121,12 +122,14 @@ def generate_fake_game_info(maxid: int, db_session):
 
 @pytest.fixture
 def api_session_fixture(monkeypatch):
+    """Prevent app from making any requests"""
     monkeypatch.setattr(SGE, "APISession", DummyAPISession)
     yield
 
 
 @pytest.fixture
 def app_client_fixture():
+    """Create new app instance"""
     app = SGE.create_app(SGE.ConfigTesting)
     with app.test_client() as client:
         yield client, app
@@ -134,57 +137,76 @@ def app_client_fixture():
 
 @pytest.fixture
 def db_session_fixture(monkeypatch):
+    """Initialize db and prevent the app from doing so again"""
     db.init(":memory:")
     monkeypatch.setattr(SGE.db, "init", lambda url: None)
     yield db.SESSION()
     sqlalchemy.orm.close_all_sessions()
 
 
-def test_routing(app_client_fixture, db_session_fixture):
+def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
     """"""
     client, _ = app_client_fixture
-    # POST to index not allowed
+
+    # monkeypatch the login function to stop OID from making any requests
+    # we're assuming a correct OID config and that call to login will result in a redirect to steam
+    login_return = "Unit test: login function triggered"
+    monkeypatch.setattr(SGE, "login", lambda: login_return)
+
+    # POST / not allowed
     resp = client.post("/tools/steam-games-exporter/")
     assert resp.status_code == 405
     assert not client.cookie_jar
 
-    # GET to index loads correctly, cookies are set
+    # GET / loads correctly, cookies are set
     resp = client.get("/tools/steam-games-exporter/")
     assert resp.status_code == 200
     assert client.cookie_jar
 
-    #FIXME: this always makes a request to https://steamcommunity.com/openid/login
-    # which makes the tests take much longer
-    # POST with cookies set leads to a redirect to steam login page
-    resp = client.post("/tools/steam-games-exporter/login")
-    assert resp.status_code == 302
-    assert client.cookie_jar
-    assert resp.headers.get("Location").startswith("https://steamcommunity.com/openid/login")
-
-    # POST: user is not redirected (so an error message can be shown) when cookies are missing
+    # POST /login without cookies -> error page, no redirect
     client.cookie_jar.clear()
     resp = client.post("/tools/steam-games-exporter/login")
     assert resp.status_code == 404
     assert not client.cookie_jar
     assert not resp.headers.get("Location")
 
-    # POST: user is redirected back to index if cookies are missing
+    # POST /login with cookies set -> redirect to steam login page (trigger monkeypatched lambda)
+    with client.session_transaction() as app_session:
+        app_session["c"] = ""
+    resp = client.post("/tools/steam-games-exporter/login")
+    assert resp.status_code == 200 # this will be a 302 normally
+    assert client.cookie_jar #cookies have not been cleared
+    assert resp.get_data().decode() == login_return
+
+    # POST /login with steamid session cookie set -> redirect to export config
+    with client.session_transaction() as app_session:
+        app_session["steamid"] = 1234567890
+    resp = client.post("/tools/steam-games-exporter/login")
+    assert resp.status_code == 302
+    assert client.cookie_jar
+    assert urlparse(resp.headers.get("Location")).path == "/tools/steam-games-exporter/export"
+
+    # POST /export without cookies -> redirect to index
     client.cookie_jar.clear()
     resp = client.post("/tools/steam-games-exporter/export")
     assert resp.status_code == 302
     assert not client.cookie_jar
     assert urlparse(resp.headers.get("Location")).path == "/tools/steam-games-exporter/"
 
-    # GET: user is redirected back to index if cookies are missing
+    # GET: /export without cookies -> redirect to index
     client.cookie_jar.clear()
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 302
     assert not client.cookie_jar
     assert urlparse(resp.headers.get("Location")).path == "/tools/steam-games-exporter/"
 
-    #TODO: test /tools/steam-games-exporter/export with cookies set
-    #TODO: test /tools/steam-games-exporter/export with an invalid steamid
-    #TODO: test /tools/steam-games-exporter/export with an invalid export format
+    # GET: /export with steamid session cookie set -> display export config
+    with client.session_transaction() as app_session:
+        app_session["steamid"] = 1234567890
+    resp = client.get("/tools/steam-games-exporter/export")
+    assert resp.status_code == 200
+    assert client.cookie_jar
+    assert not resp.headers.get("Location")
 
 
 def test_extended_export(api_session_fixture, app_client_fixture, db_session_fixture):
@@ -194,15 +216,19 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     # remove a variable from this equation; fetcher thread will be tested separately
     SGE.GAME_INFO_FETCHER = None
 
-    # set dummy steamid to prevent redirecting to index
+    ### POST: invalid export format
+    with client.session_transaction() as app_session:
+        # set dummy steamid to prevent redirecting to index
+        app_session["steamid"] = 1234567890
+    resp = client.post("/tools/steam-games-exporter/export?export",
+                       data={"format": "not a format", "include-gameinfo": True})
+    assert resp.status_code == 400
+
+    ### POST: valid request, missing game info -> user shown info about pending export
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1234567890
-
-    print(client.cookie_jar)
-    ### POST: valid request, missing game info -> user shown info about pending export
     resp = client.post("/tools/steam-games-exporter/export?export",
-                       data={"format": "csv", "include-gameinfo": True}, follow_redirects=True)
-
+                       data={"format": "csv", "include-gameinfo": True})
     assert resp.status_code == 202
     assert not resp.headers.get("Location")
     assert "Items added to the queue, return later" in resp.get_data().decode()
@@ -240,10 +266,11 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     assert db_session.query(db.Queue).count() == 0
     assert db_session.query(db.Request).count() == 0
 
-
-    # ~ cookie = http.cookiejar.Cookie(
-        # ~ version=1, name="job", value=fake_user.job_uuid, port=80, port_specified=False, domain="",
-        # ~ domain_specified=False, domain_initial_dot=False, path="/tools/steam-games-exporter",
-        # ~ path_specified=True, secure=False, expires=int(time.time() + 60*60*24), discard=False,
-        # ~ comment=None, comment_url=None, rest={'HttpOnly': None, 'SameSite': 'Lax'}
+    # ~ fake_request = db.Request(dict(), "xlsx")
+    # ~ job_cookie = http.cookiejar.Cookie(
+        # ~ version=1, name="job", value=fake_request.job_uuid, port=80, port_specified=False,
+        # ~ domain="", domain_specified=False, domain_initial_dot=False,
+        # ~ path="/tools/steam-games-exporter/", path_specified=True, secure=False,
+        # ~ expires=int(time.time() + 60*60*24), discard=False, comment=None, comment_url=None,
+        # ~ rest={'HttpOnly': None, 'SameSite': 'Lax'}
     # ~ )
