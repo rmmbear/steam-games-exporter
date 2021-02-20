@@ -55,9 +55,9 @@ SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
 STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 # if path is not set, use in-memory sqlite db ("sqlite:///")
 
-LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
+LOG_FORMAT = logging.Formatter("[%(levelname)s] [SGE] %(message)s")
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.WARNING)
+LOGGER.setLevel(logging.INFO)
 
 class ConfigProduction():
     #APPLICATION_ROOT = "/tools/steam-games-exporter/"
@@ -111,8 +111,10 @@ if FLASK_ENV != "production":
     LOGGER.addHandler(TH)
     LOGGER.setLevel(logging.DEBUG)
 else:
-    ...
-    #TODO: configure server-side logging
+    SYSLOG = logging.handlers.SysLogHandler(address="/dev/log", facility="daemon")
+    SYSLOG.setLevel(logging.INFO)
+    LOGGER.addHandler(SYSLOG)
+    #TODO: configure smtp handler for level error+
 
 FLASK_DEBUG_TOOLBAR = None
 
