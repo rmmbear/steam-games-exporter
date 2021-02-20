@@ -149,7 +149,7 @@ class GameInfoFetcher(threading.Thread):
 
                 queue_batch = queue_query.all()
                 if not queue_batch:
-                    LOGGER.debug("Nothing in the queue, waiting")
+                    LOGGER.debug("Nothing in the queue for fetcher, waiting")
                     self._wait()
                     continue
 
@@ -395,7 +395,6 @@ def export_games_extended(steamid: int, file_format: str
 
     games_json = profile_json["games"]
     new_request = db.Request(games_json, file_format)
-    LOGGER.debug("request = %s", new_request)
     games_ids = {row["appid"] for row in profile_json["games"]}
     db_session = db.SESSION()
 
