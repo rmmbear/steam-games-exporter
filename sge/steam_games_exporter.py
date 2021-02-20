@@ -23,7 +23,7 @@ import pyexcel_ods3 as pyods
 
 from sge import db
 
-__VERSION__ = "0.1"
+__VERSION__ = "0.2"
 
 COOKIE_MAX_AGE = 172800 # 2 days
 # https://partner.steamgames.com/doc/webapi_overview/responses
@@ -396,6 +396,7 @@ def games_export_config() -> werkzeug.wrappers.Response:
 # these titles must be queried from regions in which they are available
 # this is also true for titles that have been removed from the store
 # there is no way to distinguish between hidden and removed titles
+#TODO: Figure out if this info can be scraped from somewhere else
 
 #Notes on formats:
 # based on artificial tests with random and static data
