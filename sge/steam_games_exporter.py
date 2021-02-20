@@ -47,7 +47,6 @@ GAMEINFO_RELEVANT_FIELDS = [
                                                                   "timestamp", "unavailable"]
 ]
 
-
 # This is set automatically by emperor (see vassal.ini), has to be set manually in dev env
 # key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
 # not included in the repo for obvious reasons
@@ -103,7 +102,7 @@ class GameInfoFetcher(threading.Thread):
             fetcher_thread.notify(force=True)
 
         self.shutdown_notifier = threading.Thread(
-            target=shutdown_notify, args=(self,), daemon=False
+            target=shutdown_notify, name="shutdown_notify", args=(self,), daemon=False
         )
 
 
@@ -235,19 +234,32 @@ def load_job() -> None:
     LOGGER.debug("Received request")
     job_uuid = flask.request.cookies.get("job")
     if job_uuid:
+        LOGGER.debug("Found job cookie %s", job_uuid)
         job_db_row = db.SESSION().query(db.Request).filter(
             db.Request.job_uuid == job_uuid
         ).first()
         if job_db_row:
+            LOGGER.debug("Found job in db")
             flask.g.job_db_row = job_db_row
-        #FIXME: clear invalid job cookies
+        else:
+            LOGGER.info("Invalid job cookie found")
+            flask.g.clear_job_cookie = True
+
 
 @APP_BP.after_request
-def notify_fetcher(resp: Any) -> None:
-    if "queue_modified" in flask.g:
-        if GAME_INFO_FETCHER:
-            LOGGER.info("Notifying fetcher thread of modified queue ")
-            GAME_INFO_FETCHER.notify()
+def finalize_request(resp: Any) -> None:
+    if GAME_INFO_FETCHER and "queue_modified" in flask.g:
+        LOGGER.info("Notifying fetcher thread of modified queue")
+        GAME_INFO_FETCHER.notify()
+
+    if "clear_job_cookie" in flask.g:
+        LOGGER.info("Clearing job cookie")
+        resp.set_cookie(key="job", value="", expires=0, path="/tools/steam-games-exporter/",
+                        secure=False, httponly=True, samesite="Lax")
+
+    if "clear_session" in flask.g:
+        LOGGER.info("Clearing session")
+        flask.session.clear()
 
     return resp
 
@@ -262,6 +274,7 @@ def close_db_session(exc: Any) -> None:
 @APP_BP.route("/")
 def index() -> str:
     """landing page"""
+    LOGGER.debug("Entering index view")
     #cookie check
     if "c" not in flask.session:
         flask.session["c"] = None
@@ -304,6 +317,7 @@ def login() -> Union[werkzeug.wrappers.Response, str]:
 @OID.after_login
 def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Response:
     """called automatically instead of login() after successful authentication"""
+    LOGGER.debug("creating new session")
     flask.session["steamid"] = resp.identity_url.rsplit("/", maxsplit=1)[-1]
     return flask.redirect(flask.url_for("sge.games_export_config"))
 
@@ -311,6 +325,7 @@ def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Respo
 @APP_BP.route("/export", methods=("GET", "POST"))
 def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
     """Display and handle export config"""
+    LOGGER.debug("Entering export config view")
     if "job_db_row" in flask.g:
         return finalize_extended_export(flask.g.job_db_row)
 
@@ -323,7 +338,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 
         steamid = flask.session["steamid"]
         # we don't need steamid anymore, so throw it out
-        flask.session.clear()
+        flask.g.clear_session = True
 
         if flask.request.form.get("include-gameinfo"):
             return export_games_extended(steamid, flask.request.form["format"])
@@ -363,19 +378,22 @@ def export_games_extended(steamid: int, file_format: str
         Request - newly added db.Request row
         flask response - successfully exported and began sending the file
     """
+    LOGGER.debug("started extended export")
     with APISession() as s:
         profile_json = s.query_profile(steamid)
 
     if not profile_json:
-        return flask.render_template(
-            "login.html",
-            cookies=True,
-            error="Cannot export data: this account does not own any games"
+        resp = flask.make_response(
+            flask.render_template(
+                "login.html", cookies=True,
+                error="Cannot export data: this account does not own any games"),
+            404
         )
+        return resp
 
     games_json = profile_json["games"]
     new_request = db.Request(games_json, file_format)
-
+    LOGGER.debug("request = %s", new_request)
     games_ids = {row["appid"] for row in profile_json["games"]}
     db_session = db.SESSION()
 
@@ -386,8 +404,8 @@ def export_games_extended(steamid: int, file_format: str
     #FIXME: all ids are queried
     missing_ids = set(games_ids.difference(available_ids))
     if missing_ids:
-        db_session.add(new_request)
-        queue = []
+        LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
+        queue = [new_request]
         for appid in missing_ids:
             queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
                                   timestamp=int(time.time())))
@@ -423,6 +441,7 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
     ).count()
 
     if missing_ids:
+        LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         return flask.render_template(
             "login.html",
             cookies=True,
@@ -430,6 +449,7 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
                  f"Still fetching game info for {missing_ids} games"
         )
 
+    LOGGER.debug("Finalizing extended export")
     games_json = json.loads(request_job.games_json)
     requested_appids = [row["appid"] for row in games_json]
     #FIXME: prevent "too many SQL variables" error by chunking this query (max=999)
@@ -480,11 +500,10 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
         tmp.close()
         db_session.delete(flask.g.job_db_row)
         db_session.commit()
+        flask.g.clear_job_cookie = True
 
         file_response = flask.send_file(
             tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
-        file_response.set_cookie("job", "", expires=0, path="/tools/steam-games-exporter/",
-                                 secure=False, httponly=True, samesite="Lax")
         return file_response
     finally:
         tmp.close()
