@@ -21,7 +21,7 @@ import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
-from sge import config, db
+from sge import db
 
 __VERSION__ = "0.1"
 
@@ -47,33 +47,71 @@ GAMEINFO_RELEVANT_FIELDS = [
                                                                   "timestamp", "unavailable"]
 ]
 
-# This is set automatically by emperor (see vassal.ini), has to be set manually in dev env
+# env vars are set automatically by emperor (see vassal.ini), have to be set manually in dev env
 # key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
 # not included in the repo for obvious reasons
-STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
+FLASK_ENV = os.environ.get("FLASK_ENV", default="production")
 SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
+STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 # if path is not set, use in-memory sqlite db ("sqlite:///")
 
 LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.WARNING)
 
+class ConfigProduction():
+    #APPLICATION_ROOT = "/tools/steam-games-exporter/"
+    MAX_CONTENT_LENGTH = 512*1024
+    # key is generated each time app is launched
+    # sessions are short-lived and app state does not depend on them
+    # so losing a session after reload is not a concern
+    SECRET_KEY = os.urandom(16)
+    SERVER_NAME = "misc.untextured.space"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = True
+    STATIC_URL_PATH = "/tools/steam-games-exporter/static"
 
-FLASK_ENV = os.environ.get("FLASK_ENV")
+
+class ConfigDevelopment():
+    DEBUG = False
+    MAX_CONTENT_LENGTH = 512*1024
+    SECRET_KEY = "devkey"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = False
+    STATIC_URL_PATH = "/static"
+
+
+class ConfigTesting():
+    DEBUG = True
+    MAX_CONTENT_LENGTH = 512*1024
+    SECRET_KEY = "devkey"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = False
+    STATIC_URL_PATH = "/static"
+    TESTING = True
+
+
+ENV_TO_CONFIG = {
+    "production": ConfigProduction,
+    "development": ConfigDevelopment,
+    "testing": ConfigTesting
+}
+
+
 if FLASK_ENV != "development" and not SQLITE_DB_PATH:
     raise RuntimeError("Running in prod without db path specified")
-if FLASK_ENV == "development":
-    config.STATIC_URL_PATH = "/static"
-    #del config.APPLICATION_ROOT
-    del config.SERVER_NAME
-    config.SESSION_COOKIE_SECURE = False
-    config.DEBUG = True
-    config.TESTING = True
-    LOGGER.setLevel(logging.DEBUG)
+
+if FLASK_ENV != "development":
     TH = logging.StreamHandler()
     TH.setLevel(logging.DEBUG)
     TH.setFormatter(LOG_FORMAT)
     LOGGER.addHandler(TH)
+else:
+    ...
+    #TODO: configure server-side logging
 
 FLASK_DEBUG_TOOLBAR = None
 
@@ -192,10 +230,11 @@ class GameInfoFetcher(threading.Thread):
                     db_session.commit()
 
 
-def create_app(app_config: ModuleType) -> flask.Flask:
+
+def create_app(app_config: object = ENV_TO_CONFIG[FLASK_ENV]) -> flask.Flask:
     app = flask.Flask(
         __name__,
-        static_url_path=config.STATIC_URL_PATH, #type: ignore
+        static_url_path=app_config.STATIC_URL_PATH, #type: ignore
         static_folder=os.path.join(PWD, "../static"),
         template_folder=os.path.join(PWD, "../templates"),
     )

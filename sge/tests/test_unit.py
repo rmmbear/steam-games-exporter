@@ -127,10 +127,7 @@ def api_session_fixture(monkeypatch):
 
 @pytest.fixture
 def app_client_fixture():
-    app = SGE.create_app(SGE.config)
-    app.config.update(SECRET_KEY="devkey")
-    app.testing = True
-    app.debug = True
+    app = SGE.create_app(SGE.ConfigTesting)
     with app.test_client() as client:
         yield client, app
 
