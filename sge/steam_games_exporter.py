@@ -288,7 +288,7 @@ def index() -> str:
 # this exact same issue: https://github.com/mitsuhiko/flask-openid/issues/48
 
 @APP_BP.route("/login", methods=['GET', 'POST'])
-def login_router() -> Union[werkzeug.wrappers.Response, str]:
+def login_router() -> werkzeug.wrappers.Response:
     LOGGER.debug("In login router")
     openid_complete = flask.request.args.get("openid_complete")
     if openid_complete:
@@ -305,11 +305,12 @@ def login_router() -> Union[werkzeug.wrappers.Response, str]:
 
     # this should only be displayed in case of errors
     # lack of cookies is an error
-    return flask.render_template("login.html", cookies=cookies, error=OID.fetch_error())
+    return flask.make_response(
+        flask.render_template("login.html", cookies=cookies, error=OID.fetch_error()), 404)
 
 
 @OID.loginhandler
-def login() -> Union[werkzeug.wrappers.Response, str]:
+def login() -> werkzeug.wrappers.Response:
     """Redirect to steam for authentication"""
     LOGGER.debug("In OID login")
     return OID.try_login("https://steamcommunity.com/openid")
@@ -324,7 +325,7 @@ def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Respo
 
 
 @APP_BP.route("/export", methods=("GET", "POST"))
-def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
+def games_export_config() -> werkzeug.wrappers.Response:
     """Display and handle export config"""
     LOGGER.debug("Entering export config view")
     if "job_db_row" in flask.g:
@@ -346,7 +347,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 
         return export_games_simple(steamid, flask.request.form["format"])
 
-    return flask.render_template("export-config.html")
+    return flask.make_response(flask.render_template("export-config.html"), 200)
 
 #XXX: sometimes games might be unavailable in our region
 # in that case, querying the store api will result in following response:
@@ -372,7 +373,7 @@ def games_export_config() -> Union[werkzeug.wrappers.Response, str]:
 # csv doubly so because of its big file sizes
 
 def export_games_extended(steamid: int, file_format: str
-                         ) -> Union[werkzeug.wrappers.Response, str]:
+                         ) -> werkzeug.wrappers.Response:
     """Initiate export, create all necessary db rows, return control to finalize_
     Returns:
         str - error page
@@ -431,7 +432,7 @@ def export_games_extended(steamid: int, file_format: str
     return finalize_extended_export(new_request)
 
 
-def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers.Response, str]:
+def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
     """Combine profile json with stored game info.
     Returns:
         str             -> error page / notification about ongoing export
@@ -444,12 +445,15 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
 
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
-        return flask.render_template(
-            "login.html",
-            cookies=True,
-            error="Your request is still being processed. " \
-                 f"Still fetching game info for {missing_ids} games"
-        ), 202
+        resp = flask.make_response(
+            flask.render_template(
+                "login.html",
+                cookies=True,
+                error="Your request is still being processed. " \
+                     f"Still fetching game info for {missing_ids} games"),
+            202
+        )
+        return resp
 
     LOGGER.debug("Finalizing extended export")
     games_json = json.loads(request_job.games_json)
@@ -515,17 +519,20 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
 
 
 def export_games_simple(steamid: int, file_format: str
-                       ) -> Union[werkzeug.wrappers.Response, str]:
+                       ) -> werkzeug.wrappers.Response:
     """Simple export without game info"""
     with APISession() as s:
         profile_json = s.query_profile(steamid)
 
     if not profile_json:
-        return flask.render_template(
-            "login.html",
-            cookies=True,
-            error="Cannot export data: this account does not own any games"
+        resp = flask.make_response(
+            flask.render_template(
+                "login.html",
+                cookies=True,
+                error="Cannot export data: this account does not own any games"),
+            404
         )
+        return resp
 
     games_json = profile_json["games"]
     games = [list(PROFILE_RELEVANT_FIELDS)]
