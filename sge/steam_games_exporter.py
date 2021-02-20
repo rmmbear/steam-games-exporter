@@ -506,10 +506,12 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
 
     # first row contains headers
     combined_games_data = [PROFILE_RELEVANT_FIELDS + GAMEINFO_RELEVANT_FIELDS]
+    combined_games_data[0][0] = "store_url"
     for json_row in games_json:
         info = games_info[json_row["appid"]]
         data = [json_row[field] for field in PROFILE_RELEVANT_FIELDS]
         data.extend([getattr(info, field) for field in GAMEINFO_RELEVANT_FIELDS])
+        data[0] = f"https://store.steampowered.com/app/{data[0]}"
         combined_games_data.append(data)
 
     del games_json, games_info
