@@ -33,6 +33,12 @@ class Request(ORM_BASE):
         self.generated_file = None
 
 
+    def __repr__(self) -> str:
+        return "<Request({} queued at {})>".format(
+            self.job_uuid, self.timestamp
+        )
+
+
 class Queue(ORM_BASE):
     __tablename__ = "games_queue"
     appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
@@ -41,6 +47,11 @@ class Queue(ORM_BASE):
     timestamp = sqlalchemy.Column(sqlalchemy.Integer)
     scrape = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
     #^ scrape the info from store instead of using the api
+
+    def __repr__(self) -> str:
+        return "<Queue(app {} for request {})>".format(
+            self.appid, self.job_uuid
+        )
 
 
 class GameInfo(ORM_BASE):
