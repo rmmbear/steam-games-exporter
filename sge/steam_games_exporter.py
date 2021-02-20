@@ -58,6 +58,10 @@ STEAM_DEV_KEY = os.environ.get("STEAM_DEV_KEY")
 LOG_FORMAT = logging.Formatter("[%(levelname)s] [SGE] %(message)s")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
+TH = logging.StreamHandler()
+TH.setLevel(logging.INFO)
+TH.setFormatter(LOG_FORMAT)
+LOGGER.addHandler(TH)
 
 class ConfigProduction():
     #APPLICATION_ROOT = "/tools/steam-games-exporter/"
@@ -105,16 +109,10 @@ if FLASK_ENV == "production" and not SQLITE_DB_PATH:
     raise RuntimeError("Running in prod without db path specified")
 
 if FLASK_ENV != "production":
-    TH = logging.StreamHandler()
     TH.setLevel(logging.DEBUG)
-    TH.setFormatter(LOG_FORMAT)
-    LOGGER.addHandler(TH)
     LOGGER.setLevel(logging.DEBUG)
-else:
-    SYSLOG = logging.handlers.SysLogHandler(address="/dev/log", facility="daemon")
-    SYSLOG.setLevel(logging.INFO)
-    LOGGER.addHandler(SYSLOG)
-    #TODO: configure smtp handler for level error+
+
+#TODO: configure smtp handler for level error+
 
 FLASK_DEBUG_TOOLBAR = None
 
