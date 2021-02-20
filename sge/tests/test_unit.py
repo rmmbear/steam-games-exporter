@@ -137,8 +137,8 @@ def app_client_fixture():
 
 @pytest.fixture
 def db_session_fixture(monkeypatch):
-    monkeypatch.setattr(SGE, "db_init", lambda: None)
     db.init(":memory:")
+    monkeypatch.setattr(SGE.db, "init", lambda url: None)
     yield db.SESSION()
     sqlalchemy.orm.close_all_sessions()
 
@@ -194,34 +194,48 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     client, _ = app_client_fixture
     db_session = db_session_fixture
 
+    # remove a variable from this equation; fetcher thread will be tested separately
+    SGE.GAME_INFO_FETCHER = None
+
     # set dummy steamid to prevent redirecting to index
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1234567890
 
+    print(client.cookie_jar)
     ### POST: valid request, missing game info -> user shown info about pending export
-    resp = client.post(
-        "/tools/steam-games-exporter/export?export",
-        data={"format": "csv", "include-gameinfo": True}
-    )
+    resp = client.post("/tools/steam-games-exporter/export?export",
+                       data={"format": "csv", "include-gameinfo": True}, follow_redirects=True)
+
     assert resp.status_code == 202
     assert not resp.headers.get("Location")
     assert "Items added to the queue, return later" in resp.get_data().decode()
     assert "job" in [cookie.name for cookie in client.cookie_jar]
+    job_cookie = [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]
+    assert "session" not in [cookie.name for cookie in client.cookie_jar]
+    assert db_session.query(db.Queue).count() == DummyAPISession.GENERATE_GAMES_NUM
+    assert db_session.query(db.Request).count() == 1
+    assert db_session.query(db.Request).first().job_uuid == job_cookie.value
+
+    generate_fake_game_info(999, db_session)
+    assert db_session.query(db.GameInfo).count() == 999
+    db_session.query(db.Queue).delete() #clear the queue manually
+    db_session.commit()
+    assert db_session.query(db.Queue).count() == 0
 
     ### GET: job cookie present from last request, game info available for export
-    generate_fake_game_info(1000, db_session)
-    db_session.query(db.Queue).delete() #clear the queue manually
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 200
+    assert db_session.query(db.Request).count() == 0
     assert not resp.headers.get("Location")
+    assert not client.cookie_jar
     assert "attachment" in resp.headers.get("Content-Disposition")
 
+
+    ### POST: game info already available, do not queue anything, export in one step
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1234567890
-    ### POST: game info already available, do not queue anything, export in one step
-    resp = client.post(
-        "/tools/steam-games-exporter/export?export", data={"format": "xlsx", "include-gameinfo": True}
-    )
+    resp = client.post("/tools/steam-games-exporter/export?export",
+                       data={"format": "xlsx", "include-gameinfo": True})
     assert resp.status_code == 200
     assert not resp.headers.get("Location")
     assert "attachment" in resp.headers.get("Content-Disposition")
