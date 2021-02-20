@@ -234,6 +234,7 @@ def load_job() -> None:
     LOGGER.debug("Received request")
     job_uuid = flask.request.cookies.get("job")
     if job_uuid:
+        #FIXME: delay query until the resource is actually needed
         LOGGER.debug("Found job cookie %s", job_uuid)
         job_db_row = db.SESSION().query(db.Request).filter(
             db.Request.job_uuid == job_uuid
@@ -252,7 +253,7 @@ def finalize_request(resp: Any) -> None:
         LOGGER.info("Notifying fetcher thread of modified queue")
         GAME_INFO_FETCHER.notify()
 
-    if "clear_job_cookie" in flask.g:
+    if "clear_job_cookie" in flask.g and "job_db_row" in flask.g:
         LOGGER.info("Clearing job cookie")
         resp.set_cookie(key="job", value="", expires=0, path="/tools/steam-games-exporter/",
                         secure=False, httponly=True, samesite="Lax")
@@ -401,7 +402,8 @@ def export_games_extended(steamid: int, file_format: str
     available_ids = db_session.query(db.GameInfo.appid).filter(
         db.GameInfo.appid.in_(games_ids)
     ).all()
-    #FIXME: all ids are queried
+    # query returns [(id1,), (id2,), ...], flatten the list
+    available_ids = [row[0] for row in available_ids]
     missing_ids = set(games_ids.difference(available_ids))
     if missing_ids:
         LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
@@ -447,7 +449,7 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             cookies=True,
             error="Your request is still being processed. " \
                  f"Still fetching game info for {missing_ids} games"
-        )
+        ), 202
 
     LOGGER.debug("Finalizing extended export")
     games_json = json.loads(request_job.games_json)
@@ -498,8 +500,10 @@ def finalize_extended_export(request_job: db.Request) -> Union[werkzeug.wrappers
             raise ValueError(f"Unknown file format: {file_format}")
 
         tmp.close()
-        db_session.delete(flask.g.job_db_row)
-        db_session.commit()
+        if "job_db_row" in flask.g:
+            db_session.delete(flask.g.job_db_row)
+            db_session.commit()
+
         flask.g.clear_job_cookie = True
 
         file_response = flask.send_file(
