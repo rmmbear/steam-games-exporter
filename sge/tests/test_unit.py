@@ -225,11 +225,11 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     ### GET: job cookie present from last request, game info available for export
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 200
-    assert db_session.query(db.Request).count() == 0
     assert not resp.headers.get("Location")
     assert not client.cookie_jar
     assert "attachment" in resp.headers.get("Content-Disposition")
-
+    assert db_session.query(db.Queue).count() == 0
+    assert db_session.query(db.Request).count() == 0
 
     ### POST: game info already available, do not queue anything, export in one step
     with client.session_transaction() as app_session:
@@ -238,7 +238,11 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
                        data={"format": "xlsx", "include-gameinfo": True})
     assert resp.status_code == 200
     assert not resp.headers.get("Location")
+    assert not client.cookie_jar
     assert "attachment" in resp.headers.get("Content-Disposition")
+    assert db_session.query(db.Queue).count() == 0
+    assert db_session.query(db.Request).count() == 0
+
 
     # ~ cookie = http.cookiejar.Cookie(
         # ~ version=1, name="job", value=fake_user.job_uuid, port=80, port_specified=False, domain="",
