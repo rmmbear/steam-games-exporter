@@ -135,7 +135,6 @@ PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 GAME_INFO_FETCHER = None
 
-#FIXME: remove old jobs from db.Requests (older than COOKIE_MAX_AGE)
 
 class GameInfoFetcher(threading.Thread):
     """Background thread for processing db.Queue.
@@ -246,6 +245,20 @@ class GameInfoFetcher(threading.Thread):
                     db_session.delete(queue_item)
                     db_session.commit()
 
+
+def cleanup(signal):
+    """Remove old requests and vacuum the database.
+    This command is intended to be called by uwsgi cron every day (see run.py).
+    """
+    LOGGER.debug("Received uwsgi signal %s", signal)
+    LOGGER.info("Cleaning old requests")
+    cutoff = int(time.time()) - COOKIE_MAX_AGE
+    db_session = db.SESSION()
+    db_session.query(db.Request).filter(db.Request.timestamp >= cutoff).delete()
+    db_session.commit()
+    LOGGER.info("Vacuuming sqlite db")
+    db_session.execute("VACUUM")
+    db.SESSION.remove()
 
 
 def create_app(app_config: object = ENV_TO_CONFIG[FLASK_ENV]) -> flask.Flask:
@@ -555,7 +568,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
 
     file_format = request_job.export_format
     try:
-        #TODO: figure out if pyexcel api supports sequential write
+        #TODO: figure out if pyexcel api supports chunked sequential write
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
         if file_format == "ods":
