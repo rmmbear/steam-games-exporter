@@ -231,7 +231,10 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
                        data={"format": "csv", "include-gameinfo": True})
     assert resp.status_code == 202
     assert not resp.headers.get("Location")
-    assert "Items added to the queue, return later" in resp.get_data().decode()
+    resp_msg = SGE.MSG_QUEUE_CREATED.format(
+        missing_ids=DummyAPISession.GENERATE_GAMES_NUM,
+        delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1)
+    assert resp_msg in resp.get_data().decode()
     assert "job" in [cookie.name for cookie in client.cookie_jar]
     job_cookie = [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]
     assert "session" not in [cookie.name for cookie in client.cookie_jar]
