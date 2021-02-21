@@ -2,6 +2,9 @@
 <html lang="en">
     <head>
     <meta charset="utf-8">
+    {% if refresh %}
+    <meta http-equiv="refresh" content="{{ refresh }}">
+    {% endif %}
     <title>Steam games exporter</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}" type="text/css">
 </head>
