@@ -22,7 +22,7 @@ if "uwsgi" in locals():
     LOGGER = logging.getLogger(__name__)
     LOGGER.setLevel(logging.INFO)
     MAIL_HANDLER = logging.handlers.SMTPHandler(
-        "localhost", fromaddr="root@untextured.space", toaddrs="root@localhost",
+        "localhost", fromaddr="root", toaddrs="root",
         subject="[Steam Games Exporter]", secure=tuple())
     MAIL_HANDLER.setLevel(logging.INFO)
     LOGGER.addHandler(MAIL_HANDLER)
