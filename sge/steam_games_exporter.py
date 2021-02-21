@@ -345,7 +345,8 @@ def login_router() -> werkzeug.wrappers.Response:
     # this should only be displayed in case of errors
     # lack of cookies is an error
     return flask.make_response(
-        flask.render_template("error.html", no_cookies=not(cookies), error=OID.fetch_error()), 404)
+        flask.render_template(
+            "error.html", no_cookies=not(cookies), msg_type="Error", msg=OID.fetch_error()), 404)
 
 
 @OID.loginhandler
@@ -428,7 +429,12 @@ def export_games_extended(steamid: int, file_format: str
         resp = flask.make_response(
             flask.render_template(
                 "error.html",
-                error="Cannot export data: this account does not own any games"),
+                msg_type="Error",
+                msg="Cannot export data, could not find any games! " \
+                    "Please make sure 'game details' in your "
+                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
+                    "profile's privacy settings</a> is set to 'public'."
+            ),
             404
         )
         return resp
@@ -452,8 +458,6 @@ def export_games_extended(steamid: int, file_format: str
         available_ids.extend([row[0] for row in batch_result])
         last_batch_size = len(batch)
 
-    print(requested_ids)
-    print(available_ids)
     missing_ids = set(requested_ids).difference(available_ids)
     if missing_ids:
         LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
@@ -463,9 +467,13 @@ def export_games_extended(steamid: int, file_format: str
                                   timestamp=int(time.time())))
 
         resp = flask.make_response(
-            #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
-                "error.html", error="Items added to the queue, return later"),
+                "error.html",
+                msg=f"{len(missing_ids)} items added to the queue. " \
+                    f"Fetching them take at minimum " \
+                    f"{(len(missing_ids) * 1.5) // 60 + 1} minutes. " \
+                    "This page will automatically refresh every 10 seconds."
+            ),
             202
         )
         resp.set_cookie(
@@ -499,8 +507,12 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
             #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
                 "error.html",
-                error="Your request is still being processed. " \
-                     f"Still fetching game info for {missing_ids} games"),
+                refresh=10,
+                msg_type="Processing",
+                msg="Your request is still being processed. " \
+                     f"Still fetching game info for {missing_ids} games. " \
+                     "This page will refresh automatically every 10 seconds."
+            ),
             202
         )
         return resp
@@ -586,7 +598,12 @@ def export_games_simple(steamid: int, file_format: str
         resp = flask.make_response(
             flask.render_template(
                 "error.html",
-                error="Cannot export data: this account does not own any games"),
+                msg_type="Error",
+                msg="Cannot export data, could not find any games! " \
+                    "Please make sure 'game details' in your "
+                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
+                    "profile's privacy settings</a> is set to 'public'."
+            ),
             404
         )
         return resp
