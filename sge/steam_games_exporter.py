@@ -38,10 +38,23 @@ API_GAMES_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001
 # even with include_played_free_games=0
 # so instead let's pretend this is what we wanted
 
+MSG_MISSING_GAMES = "Cannot export data, could not find any games! " \
+                    "Please make sure 'game details' in your " \
+                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
+                    "profile's privacy settings</a> is set to 'public'."
+MSG_QUEUE_CREATED = "{missing_ids} items added to the queue. " \
+                    "Fetching them take at minimum {delay} minutes. " \
+                    "This page will automatically refresh every 10 seconds."
+MSG_PROCESSING_QUEUE = "Your request is still being processed. " \
+                       "Still fetching game info for {missing_ids} games. " \
+                       "This page will refresh automatically every 10 seconds."
+
+
 PROFILE_RELEVANT_FIELDS = [
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
 ]
+
 GAMEINFO_RELEVANT_FIELDS = [
     c.key for c in db.GameInfo.__table__.columns if c.key not in ["name", "appid",
                                                                   "timestamp", "unavailable"]
@@ -228,7 +241,6 @@ class GameInfoFetcher(threading.Thread):
 
                     db_session.delete(queue_item)
                     db_session.commit()
-
 
 
 def create_app(app_config: object = ENV_TO_CONFIG[FLASK_ENV]) -> flask.Flask:
@@ -427,15 +439,7 @@ def export_games_extended(steamid: int, file_format: str
 
     if not profile_json:
         resp = flask.make_response(
-            flask.render_template(
-                "error.html",
-                msg_type="Error",
-                msg="Cannot export data, could not find any games! " \
-                    "Please make sure 'game details' in your "
-                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
-                    "profile's privacy settings</a> is set to 'public'."
-            ),
-            404
+            flask.render_template("error.html", msg_type="Error", msg=MSG_MISSING_GAMES), 404
         )
         return resp
 
@@ -468,11 +472,9 @@ def export_games_extended(steamid: int, file_format: str
 
         resp = flask.make_response(
             flask.render_template(
-                "error.html",
-                msg=f"{len(missing_ids)} items added to the queue. " \
-                    f"Fetching them take at minimum " \
-                    f"{(len(missing_ids) * 1.5) // 60 + 1} minutes. " \
-                    "This page will automatically refresh every 10 seconds."
+                "error.html", refresh=10, msg_type="Processing",
+                msg=MSG_QUEUE_CREATED.format(missing_ids=len(missing_ids),
+                                             delay=(len(missing_ids) * 1.5) // 60 + 1)
             ),
             202
         )
@@ -506,12 +508,8 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         resp = flask.make_response(
             #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
-                "error.html",
-                refresh=10,
-                msg_type="Processing",
-                msg="Your request is still being processed. " \
-                     f"Still fetching game info for {missing_ids} games. " \
-                     "This page will refresh automatically every 10 seconds."
+                "error.html", refresh=10, msg_type="Processing",
+                msg=MSG_PROCESSING_QUEUE.format(missing_count=missing_ids)
             ),
             202
         )
@@ -596,14 +594,7 @@ def export_games_simple(steamid: int, file_format: str
 
     if not profile_json:
         resp = flask.make_response(
-            flask.render_template(
-                "error.html",
-                msg_type="Error",
-                msg="Cannot export data, could not find any games! " \
-                    "Please make sure 'game details' in your "
-                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
-                    "profile's privacy settings</a> is set to 'public'."
-            ),
+            flask.render_template("error.html", msg_type="Error", msg=MSG_MISSING_GAMES),
             404
         )
         return resp
