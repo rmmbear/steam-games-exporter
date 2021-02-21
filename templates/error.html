@@ -3,7 +3,9 @@
     {% if no_cookies %}
     <p><strong>Error:</strong> Cookies not detected. If your browser is rejecting cookies (which are necessary for this app), please allow cookies from https://misc.untextured.space for this session in your browser's settings.</p>
     {% endif %}
-    {% if error %}<p class="error"><strong>Error:</strong> {{ error }}</p>{% endif %}
+    {% if msg %}
+    <p class="message">{% if msg_type %}<strong>{{ msg_type }}:</strong> {% endif %} {{ msg }}</p>
+    {% endif %}
     <form action="." method="get">
         <a href="."><button type="button" class="btn-back" title="Back">Back</button></a>
     </form>
