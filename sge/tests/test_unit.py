@@ -65,7 +65,7 @@ JSON_TEMPLATE_GAMEINFO = """{
 
 
 class DummyAPISession(SGE.APISession):
-    GENERATE_GAMES_NUM = 999
+    GENERATE_GAMES_NUM = 3000
 
     def query(self, prepared_query: requests.PreparedRequest, *args, **kwargs) -> requests.Response:
         """Return dummy json as requests.Response."""
@@ -239,8 +239,8 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     assert db_session.query(db.Request).count() == 1
     assert db_session.query(db.Request).first().job_uuid == job_cookie.value
 
-    generate_fake_game_info(999, db_session)
-    assert db_session.query(db.GameInfo).count() == 999
+    generate_fake_game_info(DummyAPISession.GENERATE_GAMES_NUM, db_session)
+    assert db_session.query(db.GameInfo).count() == DummyAPISession.GENERATE_GAMES_NUM
     db_session.query(db.Queue).delete() #clear the queue manually
     db_session.commit()
     assert db_session.query(db.Queue).count() == 0
