@@ -20,7 +20,7 @@ from sge.steam_games_exporter import create_app, cleanup
 APP = create_app()
 if "uwsgi" in locals():
     LOGGER = logging.getLogger(__name__)
-    LOGGER = LOGGER.setLevel(logging.INFO)
+    LOGGER.setLevel(logging.INFO)
     MAIL_HANDLER = logging.handlers.SMTPHandler(
         "localhost", fromaddr="root@untextured.space", toaddrs="root@localhost",
         subject="[Steam Games Exporter]", secure=tuple())
