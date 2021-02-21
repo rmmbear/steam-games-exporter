@@ -22,7 +22,6 @@ import pyexcel_ods3 as pyods
 
 from sge import db
 
-
 __VERSION__ = "0.2"
 
 COOKIE_MAX_AGE = 172800 # 2 days
@@ -48,7 +47,6 @@ MSG_QUEUE_CREATED = "{missing_ids} items added to the queue. " \
 MSG_PROCESSING_QUEUE = "Your request is still being processed. " \
                        "Still fetching game info for {missing_ids} games. " \
                        "This page will refresh automatically every 10 seconds."
-
 
 PROFILE_RELEVANT_FIELDS = [
     "appid", "name", "playtime_forever", "playtime_windows_forever",
@@ -241,6 +239,7 @@ class GameInfoFetcher(threading.Thread):
 
                     db_session.delete(queue_item)
                     db_session.commit()
+
 
 
 def create_app(app_config: object = ENV_TO_CONFIG[FLASK_ENV]) -> flask.Flask:
@@ -508,7 +507,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         resp = flask.make_response(
             flask.render_template(
                 "error.html", refresh=10, msg_type="Processing",
-                msg=MSG_PROCESSING_QUEUE.format(missing_count=missing_ids)
+                msg=MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids)
             ),
             202
         )
