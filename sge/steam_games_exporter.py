@@ -506,7 +506,6 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         resp = flask.make_response(
-            #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
                 "error.html", refresh=10, msg_type="Processing",
                 msg=MSG_PROCESSING_QUEUE.format(missing_count=missing_ids)
