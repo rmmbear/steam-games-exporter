@@ -47,12 +47,16 @@ MSG_QUEUE_CREATED = "{missing_ids} items added to the queue. " \
 MSG_PROCESSING_QUEUE = "Your request is still being processed. " \
                        "Still fetching game info for {missing_ids} games. " \
                        "This page will refresh automatically every 10 seconds."
+MSG_RATE_LIMITED = "The server is currently rate limited and your request will take longer " \
+                   "to complete."
+MSG_NO_COOKIES = "If your browser is rejecting cookies (which are necessary for this app), " \
+                 "please allow cookies from https://misc.untextured.space in your browser's " \
+                 "settings for this session."
 
 PROFILE_RELEVANT_FIELDS = [
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
 ]
-
 GAMEINFO_RELEVANT_FIELDS = [
     c.key for c in db.GameInfo.__table__.columns if c.key not in ["name", "appid",
                                                                   "timestamp", "unavailable"]
@@ -219,14 +223,16 @@ class GameInfoFetcher(threading.Thread):
                             db_session.add(game_info)
                         except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as exc:
                             LOGGER.warning("Network error: %s", exc)
-                            #FIXME: detect when we're getting rate limited
-                            # if isinstance(exc, requests.HTTPError) and exc.status_code == 429:
-                            #   self.wait(timeout=rate_limited_until, rate_limited=True)
-                            # else:
-                            self._wait(10, rate_limited=True)
+                            if exc.response and exc.response.status_code == 429:
+                                # wait longer if we're rate limited,
+                                # store api does not tell us how long we have to wait
+                                self._wait(timeout=60, rate_limited=True)
+                            else:
+                                self._wait(10, rate_limited=True)
+
                             continue
                         except Exception as exc:
-                            LOGGER.exception("Ignoring exception:")
+                            LOGGER.exception("Ignoring unexpected exception:")
                             db_session.rollback()
                             # move item to the bottom of the stack
                             queue_item.timestamp = int(time.time())
@@ -355,9 +361,14 @@ def login_router() -> werkzeug.wrappers.Response:
 
     # this should only be displayed in case of errors
     # lack of cookies is an error
-    return flask.make_response(
-        flask.render_template(
-            "error.html", no_cookies=not(cookies), msg_type="Error", msg=OID.fetch_error()), 404)
+    messages = []
+    if not cookies:
+        messages.append(("Missing cookies", MSG_NO_COOKIES))
+    oid_error = OID.fetch_error()
+    if oid_error:
+        messages.append(("OpenID Error", oid_error))
+
+    return flask.make_response(flask.render_template("error.html", messages=messages), 404)
 
 
 @OID.loginhandler
@@ -437,8 +448,11 @@ def export_games_extended(steamid: int, file_format: str
         profile_json = s.query_profile(steamid)
 
     if not profile_json:
+        messages = [("Error", MSG_MISSING_GAMES)]
+        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+            messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", msg_type="Error", msg=MSG_MISSING_GAMES), 404
+            flask.render_template("error.html", messages=messages), 404
         )
         return resp
 
@@ -469,25 +483,25 @@ def export_games_extended(steamid: int, file_format: str
             queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
                                   timestamp=int(time.time())))
 
+        messages = [
+            ("Processing",
+             MSG_QUEUE_CREATED.format(
+                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1)
+            )
+        ]
+        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+            messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template(
-                "error.html", refresh=10, msg_type="Processing",
-                msg=MSG_QUEUE_CREATED.format(missing_ids=len(missing_ids),
-                                             delay=(len(missing_ids) * 1.5) // 60 + 1)
-            ),
-            202
-        )
+            flask.render_template("error.html", refresh=10, messages=messages), 202)
         resp.set_cookie(
             "job", value=new_request.job_uuid, max_age=COOKIE_MAX_AGE,
-            path="/tools/steam-games-exporter/",
-            secure=False, httponly=True, samesite="Lax"
+            path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
         )
         db_session.bulk_save_objects(queue)
         db_session.commit()
         flask.g.queue_modified = True
         return resp
     #else: all necessary info already present in db, no need to persist the new request
-
     return finalize_extended_export(new_request)
 
 
@@ -504,13 +518,11 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
 
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
+        messages = [("Processing", MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids))]
+        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+            messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template(
-                "error.html", refresh=10, msg_type="Processing",
-                msg=MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids)
-            ),
-            202
-        )
+            flask.render_template("error.html", refresh=10, messages=messages), 200)
         return resp
 
     LOGGER.debug("Finalizing extended export")
@@ -591,10 +603,10 @@ def export_games_simple(steamid: int, file_format: str
         profile_json = s.query_profile(steamid)
 
     if not profile_json:
-        resp = flask.make_response(
-            flask.render_template("error.html", msg_type="Error", msg=MSG_MISSING_GAMES),
-            404
-        )
+        messages = [("Error", MSG_MISSING_GAMES)]
+        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+            messages.append(("Error", MSG_RATE_LIMITED))
+        resp = flask.make_response(flask.render_template("error.html", messages=messages), 404)
         return resp
 
     games_json = profile_json["games"]
