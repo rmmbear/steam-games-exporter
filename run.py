@@ -30,5 +30,5 @@ if "uwsgi" in locals():
     MAIL_HANDLER.setLevel(logging.INFO)
     LOGGER.addHandler(MAIL_HANDLER)
     LOGGER.info("Steam Games Exporter started successfully in uwsgi mode")
-    MAIL_HANDLER.setLevel(logging.INFO)
+    MAIL_HANDLER.setLevel(logging.ERROR)
     SGE_LOGGER.addHandler(MAIL_HANDLER)
