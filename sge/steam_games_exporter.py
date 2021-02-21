@@ -7,8 +7,7 @@ import logging
 import tempfile
 import threading
 
-from types import ModuleType
-from typing import Any, IO, Optional, Union
+from typing import Any, IO, List, Optional, Union
 from urllib.parse import urlparse
 
 import flask
@@ -22,6 +21,7 @@ import pyexcel_xlsx as pyxlsx
 import pyexcel_ods3 as pyods
 
 from sge import db
+
 
 __VERSION__ = "0.2"
 
@@ -103,7 +103,6 @@ ENV_TO_CONFIG = {
     "development": ConfigDevelopment,
     "testing": ConfigTesting
 }
-
 
 if FLASK_ENV == "production" and not SQLITE_DB_PATH:
     raise RuntimeError("Running in prod without db path specified")
@@ -436,16 +435,26 @@ def export_games_extended(steamid: int, file_format: str
 
     games_json = profile_json["games"]
     new_request = db.Request(games_json, file_format)
-    games_ids = {row["appid"] for row in profile_json["games"]}
+    requested_ids = [row["appid"] for row in games_json]
+    available_ids = []
     db_session = db.SESSION()
 
-    #FIXME: prevent "too many SQL variables" error by chunking this query (max=999)
-    available_ids = db_session.query(db.GameInfo.appid).filter(
-        db.GameInfo.appid.in_(games_ids)
-    ).all()
-    # query returns [(id1,), (id2,), ...], flatten the list
-    available_ids = [row[0] for row in available_ids]
-    missing_ids = set(games_ids.difference(available_ids))
+    batch_size = 999
+    loop_num = 0
+    last_batch_size = batch_size
+    while last_batch_size == batch_size:
+        loop_num += 1
+        batch = requested_ids[batch_size*(loop_num-1):batch_size*loop_num]
+        batch_result = db_session.query(db.GameInfo.appid).filter(
+            db.GameInfo.appid.in_(batch)
+        ).all()
+        # query returns [(id1,), (id2,), ...], so we need to flatten the list
+        available_ids.extend([row[0] for row in batch_result])
+        last_batch_size = len(batch)
+
+    print(requested_ids)
+    print(available_ids)
+    missing_ids = set(requested_ids).difference(available_ids)
     if missing_ids:
         LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
         queue = [new_request]
@@ -454,6 +463,7 @@ def export_games_extended(steamid: int, file_format: str
                                   timestamp=int(time.time())))
 
         resp = flask.make_response(
+            #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
                 "error.html", error="Items added to the queue, return later"),
             202
@@ -486,6 +496,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         resp = flask.make_response(
+            #TODO: auto-reload the page every 10 seconds or so
             flask.render_template(
                 "error.html",
                 error="Your request is still being processed. " \
@@ -496,12 +507,17 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
 
     LOGGER.debug("Finalizing extended export")
     games_json = json.loads(request_job.games_json)
-    requested_appids = [row["appid"] for row in games_json]
-    #FIXME: prevent "too many SQL variables" error by chunking this query (max=999)
-    _games_info = db_session.query(db.GameInfo).filter(
-        db.GameInfo.appid.in_(requested_appids)
-    ).all()
-    del requested_appids
+    _games_info = [] #type: List[db.GameInfo]
+
+    batch_size = 999
+    loop_num = 0
+    last_batch_size = batch_size
+    while last_batch_size == batch_size:
+        loop_num += 1
+        batch = [row["appid"] for row in games_json[batch_size*(loop_num-1):batch_size*loop_num]]
+        _games_info.extend(db_session.query(db.GameInfo).filter(db.GameInfo.appid.in_(batch)).all())
+        last_batch_size = len(batch)
+
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
     games_info = {row.appid:row for row in _games_info}
 
@@ -519,6 +535,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
 
     file_format = request_job.export_format
     try:
+        #TODO: figure out if pyexcel api supports sequential write
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
         if file_format == "ods":
