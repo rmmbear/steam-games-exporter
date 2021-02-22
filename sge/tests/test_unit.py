@@ -13,8 +13,7 @@ import sqlalchemy.orm
 os.environ["FLASK_ENV"] = "testing"
 
 import sge
-from sge import db
-from sge import steam_games_exporter as _SGE
+from sge import db, views
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.DEBUG)
@@ -135,7 +134,7 @@ def app_client_fixture():
 def db_session_fixture(monkeypatch):
     """Initialize db and prevent the app from doing so again"""
     db.init(":memory:")
-    monkeypatch.setattr(_SGE.db, "init", lambda url: None)
+    monkeypatch.setattr(db, "init", lambda url: None)
     yield db.SESSION()
     sqlalchemy.orm.close_all_sessions()
 
@@ -147,7 +146,7 @@ def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
     login_return = "Unit test: login function triggered"
-    monkeypatch.setattr(_SGE, "login", lambda: login_return)
+    monkeypatch.setattr(views, "login", lambda: login_return)
 
     # POST / not allowed
     resp = client.post("/tools/steam-games-exporter/")
@@ -210,7 +209,7 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     db_session = db_session_fixture
 
     # remove a variable from this equation; fetcher thread will be tested separately
-    _SGE.GAME_INFO_FETCHER = None
+    views.GAME_INFO_FETCHER = None
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
@@ -227,7 +226,7 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
                        data={"format": "csv", "include-gameinfo": True})
     assert resp.status_code == 202
     assert not resp.headers.get("Location")
-    resp_msg = _SGE.MSG_QUEUE_CREATED.format(
+    resp_msg = views.MSG_QUEUE_CREATED.format(
         missing_ids=DummyAPISession.GENERATE_GAMES_NUM,
         delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1)
     assert resp_msg in resp.get_data().decode()

@@ -11,8 +11,8 @@ import flask
 
 import requests
 
-import sge.db as db
-import sge.steam_games_exporter as SGE
+from . import db
+from . import views
 
 __VERSION__ = "0.2"
 
@@ -294,7 +294,7 @@ def cleanup(signal: int) -> None:
     """
     LOGGER.debug("Received uwsgi signal %s", signal)
     LOGGER.info("Cleaning old requests")
-    cutoff = int(time.time()) - SGE.COOKIE_MAX_AGE
+    cutoff = int(time.time()) - views.COOKIE_MAX_AGE
     db_session = db.SESSION()
     db_session.query(db.Request).filter(db.Request.timestamp >= cutoff).delete()
     db_session.commit()
@@ -311,8 +311,8 @@ def create_app(app_config: object) -> flask.Flask:
         template_folder=os.path.join(PWD, "../templates"),
     )
     app.config.from_object(app_config)
-    app.register_blueprint(SGE.APP_BP)
-    SGE.OID.init_app(app)
+    app.register_blueprint(views.APP_BP)
+    views.OID.init_app(app)
 
     db.init(SQLITE_DB_PATH)
     global GAME_INFO_FETCHER
