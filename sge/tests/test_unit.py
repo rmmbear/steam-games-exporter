@@ -12,16 +12,12 @@ import sqlalchemy.orm
 #from sqlalchemy import Session
 os.environ["FLASK_ENV"] = "testing"
 
+import sge
 from sge import db
-from sge import steam_games_exporter as SGE
+from sge import steam_games_exporter as _SGE
+
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.DEBUG)
-
-TH = logging.StreamHandler()
-TH.setLevel(logging.DEBUG)
-TH.setFormatter(SGE.LOG_FORMAT)
-LOGGER.addHandler(TH)
-
 
 JSON_TEMPLATE_PROFILE = "{\"response\": {\"game_count\": %d, \"games\": [%s]}}"
 JSON_TEMPLATE_GAME = """{
@@ -64,18 +60,18 @@ JSON_TEMPLATE_GAMEINFO = """{
 }"""
 
 
-class DummyAPISession(SGE.APISession):
+class DummyAPISession(sge.APISession):
     GENERATE_GAMES_NUM = 3000
 
     def query(self, prepared_query: requests.PreparedRequest, *args, **kwargs) -> requests.Response:
         """Return dummy json as requests.Response."""
         url = urlparse(str(prepared_query.url))
         query = dict(pair.split("=") for pair in url.query.lower().split("&")) #type: Dict[str, str]
-        if url.netloc in SGE.API_STORE_URL:
+        if url.netloc in sge.APISession.API_STORE_URL:
             appid = int(query["appids"])
             LOGGER.debug("Querying store with appid=%s", appid)
             content = self.fetch_dummy_game_info(appid).encode()
-        elif url.netloc in SGE.API_GAMES_URL:
+        elif url.netloc in sge.APISession.API_GAMES_URL:
             steamid = int(query["steamid"])
             LOGGER.debug("Querying profile with steamid=%s", steamid)
             content = self.fetch_dummy_steam_profile(steamid).encode()
@@ -123,14 +119,14 @@ def generate_fake_game_info(maxid: int, db_session):
 @pytest.fixture
 def api_session_fixture(monkeypatch):
     """Prevent app from making any requests"""
-    monkeypatch.setattr(SGE, "APISession", DummyAPISession)
+    monkeypatch.setattr(sge, "APISession", DummyAPISession)
     yield
 
 
 @pytest.fixture
 def app_client_fixture():
     """Create new app instance"""
-    app = SGE.create_app(SGE.ConfigTesting)
+    app = sge.create_app(sge.ConfigTesting)
     with app.test_client() as client:
         yield client, app
 
@@ -139,7 +135,7 @@ def app_client_fixture():
 def db_session_fixture(monkeypatch):
     """Initialize db and prevent the app from doing so again"""
     db.init(":memory:")
-    monkeypatch.setattr(SGE.db, "init", lambda url: None)
+    monkeypatch.setattr(_SGE.db, "init", lambda url: None)
     yield db.SESSION()
     sqlalchemy.orm.close_all_sessions()
 
@@ -151,7 +147,7 @@ def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
     login_return = "Unit test: login function triggered"
-    monkeypatch.setattr(SGE, "login", lambda: login_return)
+    monkeypatch.setattr(_SGE, "login", lambda: login_return)
 
     # POST / not allowed
     resp = client.post("/tools/steam-games-exporter/")
@@ -214,7 +210,7 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     db_session = db_session_fixture
 
     # remove a variable from this equation; fetcher thread will be tested separately
-    SGE.GAME_INFO_FETCHER = None
+    _SGE.GAME_INFO_FETCHER = None
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
@@ -231,7 +227,7 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
                        data={"format": "csv", "include-gameinfo": True})
     assert resp.status_code == 202
     assert not resp.headers.get("Location")
-    resp_msg = SGE.MSG_QUEUE_CREATED.format(
+    resp_msg = _SGE.MSG_QUEUE_CREATED.format(
         missing_ids=DummyAPISession.GENERATE_GAMES_NUM,
         delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1)
     assert resp_msg in resp.get_data().decode()
@@ -277,3 +273,7 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
         # ~ expires=int(time.time() + 60*60*24), discard=False, comment=None, comment_url=None,
         # ~ rest={'HttpOnly': None, 'SameSite': 'Lax'}
     # ~ )
+
+
+def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture):
+    sge.cleanup(-1)
