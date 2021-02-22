@@ -74,9 +74,10 @@ LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 TH = logging.StreamHandler()
-TH.setLevel(logging.WARNING)
+TH.setLevel(logging.INFO)
 TH.setFormatter(LOG_FORMAT)
 LOGGER.addHandler(TH)
+
 
 class ConfigProduction():
     #APPLICATION_ROOT = "/tools/steam-games-exporter/"
@@ -126,14 +127,12 @@ if FLASK_ENV != "production":
     TH.setLevel(logging.DEBUG)
     LOGGER.setLevel(logging.DEBUG)
 
-#TODO: configure smtp handler for level error+
-
-FLASK_DEBUG_TOOLBAR = None
 
 OID = flask_openid.OpenID()
 PWD = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 GAME_INFO_FETCHER = None
+FLASK_DEBUG_TOOLBAR = None
 
 
 class GameInfoFetcher(threading.Thread):
@@ -246,7 +245,7 @@ class GameInfoFetcher(threading.Thread):
                     db_session.commit()
 
 
-def cleanup(signal):
+def cleanup(signal: int) -> None:
     """Remove old requests and vacuum the database.
     This command is intended to be called by uwsgi cron every day (see run.py).
     """
