@@ -18,10 +18,16 @@ except ImportError:
 sys.path.append(os.path.realpath(__file__).rsplit("/", maxsplit=1)[0])
 import sge
 
+# env vars are set automatically by emperor (see vassal.ini), have to be set manually in dev env
+# key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
+# not included in the repo for obvious reasons
+STEAM_KEY = os.environ.get("STEAM_DEV_KEY")
 FLASK_ENV = os.environ.get("FLASK_ENV", default="production")
+DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
+# if path is not set, use in-memory sqlite db ("sqlite:///")
 MAILX = shutil.which("mailx")
 
-APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV])
+APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV], steam_key=STEAM_KEY, db_path=DB_PATH)
 if "uwsgi" in locals():
     uwsgi.register_signal(10, "", sge.cleanup)
     uwsgi.add_cron(10, 0, 1, -1, -1, -1)
@@ -32,8 +38,8 @@ if "uwsgi" in locals():
     LOGGER = logging.getLogger(__name__)
     LOGGER.setLevel(logging.INFO)
     MAIL_HANDLER = logging.handlers.SMTPHandler(
-        "localhost", fromaddr="root", toaddrs="root",
-        subject="[Steam Games Exporter]", secure=tuple())
+        "localhost", fromaddr="root", toaddrs=["root"],
+        subject="[Steam Games Exporter]", secure=None)
     MAIL_HANDLER.setLevel(logging.INFO)
     LOGGER.addHandler(MAIL_HANDLER)
     LOGGER.info("Steam Games Exporter started successfully in uwsgi mode")

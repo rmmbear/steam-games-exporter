@@ -21,15 +21,6 @@ from sge import db
 
 LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.INFO)
-
-
-COOKIE_MAX_AGE = 172800 # 2 days
-# https://partner.steamgames.com/doc/webapi_overview/responses
-
-# despite what the resources on this endpoint say, free games are included in the response
-# even with include_played_free_games=0
-# so instead let's pretend this is what we wanted
 
 MSG_MISSING_GAMES = "Cannot export data, could not find any games! " \
                     "Please make sure 'game details' in your " \
@@ -47,7 +38,6 @@ MSG_QUEUE_CREATED = "{missing_ids} items added to the queue. " \
 MSG_RATE_LIMITED = "The server is currently rate limited and your request will take longer " \
                    "to complete."
 
-
 PROFILE_RELEVANT_FIELDS = [
     "appid", "name", "playtime_forever", "playtime_windows_forever",
     "playtime_mac_forever", "playtime_linux_forever"
@@ -57,24 +47,16 @@ GAMEINFO_RELEVANT_FIELDS = [
                                                                   "timestamp", "unavailable"]
 ]
 
-# env vars are set automatically by emperor (see vassal.ini), have to be set manually in dev env
-# key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
-# not included in the repo for obvious reasons
-FLASK_ENV = os.environ.get("FLASK_ENV", default="production")
-SQLITE_DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
-# if path is not set, use in-memory sqlite db ("sqlite:///")
-
 OID = flask_openid.OpenID()
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
-GAME_INFO_FETCHER = None
+
 
 @APP_BP.before_app_first_request
-def db_init() -> None:
+def init() -> None:
     """Create engine, bind it to sessionmaker, and create tables"""
     LOGGER.info("Received first request, Initializing db")
-    db.init(SQLITE_DB_PATH)
-    if GAME_INFO_FETCHER:
-        GAME_INFO_FETCHER.start()
+    db.init(flask.current_app.config["SGE_DB_PATH"])
+    flask.current_app.config["SGE_FETCHER_THREAD"].start()
 
 
 @APP_BP.before_request
@@ -97,9 +79,9 @@ def load_job() -> None:
 
 @APP_BP.after_request
 def finalize_request(resp: Any) -> None:
-    if GAME_INFO_FETCHER and "queue_modified" in flask.g:
+    if "queue_modified" in flask.g:
         LOGGER.info("Notifying fetcher thread of modified queue")
-        GAME_INFO_FETCHER.notify()
+        flask.current_app.config["SGE_FETCHER_THREAD"].notify()
 
     if "clear_job_cookie" in flask.g and "job_db_row" in flask.g:
         LOGGER.info("Clearing job cookie")
@@ -243,7 +225,7 @@ def export_games_extended(steamid: int, file_format: str
 
     if not profile_json:
         messages = [("Error", MSG_MISSING_GAMES)]
-        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+        if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
             flask.render_template("error.html", messages=messages), 404
@@ -283,12 +265,12 @@ def export_games_extended(steamid: int, file_format: str
                  missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1)
             )
         ]
-        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+        if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
             flask.render_template("error.html", refresh=10, messages=messages), 202)
         resp.set_cookie(
-            "job", value=new_request.job_uuid, max_age=COOKIE_MAX_AGE,
+            "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
             path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
         )
         db_session.bulk_save_objects(queue)
@@ -313,7 +295,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         messages = [("Processing", MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids))]
-        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
+        if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
             flask.render_template("error.html", refresh=10, messages=messages), 200)
@@ -397,10 +379,8 @@ def export_games_simple(steamid: int, file_format: str
         profile_json = s.query_profile(steamid)
 
     if not profile_json:
-        messages = [("Error", MSG_MISSING_GAMES)]
-        if GAME_INFO_FETCHER and GAME_INFO_FETCHER.rate_limited:
-            messages.append(("Error", MSG_RATE_LIMITED))
-        resp = flask.make_response(flask.render_template("error.html", messages=messages), 404)
+        resp = flask.make_response(
+            flask.render_template("error.html", messages=[("Error", MSG_MISSING_GAMES)]), 404)
         return resp
 
     games_json = profile_json["games"]

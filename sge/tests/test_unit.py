@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 # ~ import http.cookiejar
@@ -9,8 +8,6 @@ from urllib.parse import urlparse
 import pytest
 import requests
 import sqlalchemy.orm
-#from sqlalchemy import Session
-os.environ["FLASK_ENV"] = "testing"
 
 import sge
 from sge import db, views
@@ -31,7 +28,7 @@ JSON_TEMPLATE_GAME = """{
     "playtime_linux_forever": 0
 }"""
 JSON_TEMPLATE_GAMEINFO = """{
-    '%d':{
+    "%d":{
         "success": true,
         "data":{
             "type": "game",
@@ -125,7 +122,7 @@ def api_session_fixture(monkeypatch):
 @pytest.fixture
 def app_client_fixture():
     """Create new app instance"""
-    app = sge.create_app(sge.ConfigTesting)
+    app = sge.create_app(sge.ConfigDevelopment, steam_key="", db_path=":memory:")
     with app.test_client() as client:
         yield client, app
 
@@ -134,7 +131,7 @@ def app_client_fixture():
 def db_session_fixture(monkeypatch):
     """Initialize db and prevent the app from doing so again"""
     db.init(":memory:")
-    monkeypatch.setattr(db, "init", lambda url: None)
+    monkeypatch.setattr(views.db, "init", lambda url: None)
     yield db.SESSION()
     sqlalchemy.orm.close_all_sessions()
 
@@ -205,11 +202,12 @@ def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
 
 
 def test_extended_export(api_session_fixture, app_client_fixture, db_session_fixture):
-    client, _ = app_client_fixture
+    client, app = app_client_fixture
     db_session = db_session_fixture
 
-    # remove a variable from this equation; fetcher thread will be tested separately
-    views.GAME_INFO_FETCHER = None
+    # disable fetcher thread by overriding its start method
+    # we're manually adding all the entries and don't want fetcher to interfere
+    app.config["SGE_FETCHER_THREAD"].start = lambda: None
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
@@ -275,4 +273,12 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
 
 
 def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture):
-    sge.cleanup(-1)
+    client, app = app_client_fixture
+    db_session = db_session_fixture
+
+    ### cleaner runs without issues in empty db
+    assert db_session.query(db.GameInfo).count() == 0
+    assert db_session.query(db.Queue).count() == 0
+    assert db_session.query(db.Request).count() == 0
+    with app.app_context():
+        sge.cleanup(-1)
