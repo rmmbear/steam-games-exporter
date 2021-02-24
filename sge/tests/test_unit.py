@@ -58,6 +58,7 @@ JSON_TEMPLATE_GAMEINFO = """{
 
 class DummyAPISession(sge.APISession):
     GENERATE_GAMES_NUM = 3000
+    USERS = {}
 
     def query(self, prepared_query: requests.PreparedRequest, *args, **kwargs) -> requests.Response:
         """Return dummy json as requests.Response."""
@@ -89,11 +90,15 @@ class DummyAPISession(sge.APISession):
         """Generate cls.GENERATE_GAMES_NUM fake game entries.
         Return those entries formatted as steam API json response.
         """
+        if steamid in self.USERS:
+            return self.USERS[steamid]
+
         games = []
         for i in range(1, self.GENERATE_GAMES_NUM + 1):
             games.append(JSON_TEMPLATE_GAME % (i, f"App {i}"))
 
-        return JSON_TEMPLATE_PROFILE % (len(games), ", ".join(games))
+        self.USERS[steamid] = JSON_TEMPLATE_PROFILE % (len(games), ", ".join(games))
+        return self.USERS[steamid]
 
 
     def fetch_dummy_game_info(self, appid: int) -> str:
