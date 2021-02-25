@@ -239,6 +239,11 @@ def export_games_extended(steamid: int, file_format: str
     missing_ids = check_for_missing_ids(requested_ids)
     if missing_ids:
         queue = [new_request]
+         # compare missing ids against currently queued ids
+        queued_ids = db.in_query_chunked(db.Queue.appid, db.Queue.appid, list(missing_ids))
+        queued_ids = [row[0] for row in queued_ids]
+        missing_ids = missing_ids.difference(queued_ids)
+        LOGGER.debug("%s missing ids after comparing with queue", len(missing_ids))
         for appid in missing_ids:
             queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
                                   timestamp=int(time.time())))
@@ -267,40 +272,11 @@ def export_games_extended(steamid: int, file_format: str
 
 def check_for_missing_ids(requested_ids: List[int]) -> set:
     db_session = db.SESSION()
-    available_ids = []
-
-    batch_size = 999
-    loop_num = 0
-    last_batch_size = batch_size
-    while last_batch_size == batch_size:
-        loop_num += 1
-        batch = requested_ids[batch_size*(loop_num-1):batch_size*loop_num]
-        batch_result = db_session.query(db.GameInfo.appid).filter(
-            db.GameInfo.appid.in_(batch)
-        ).all()
-        # query returns [(id1,), (id2,), ...], so we need to flatten the list
-        available_ids.extend([row[0] for row in batch_result])
-        last_batch_size = len(batch)
-
+    available_ids = db.in_query_chunked(db.GameInfo.appid, db.GameInfo.appid, requested_ids)
+    # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
+    available_ids = [row[0] for row in available_ids]
     missing_ids = set(requested_ids).difference(available_ids)
-    available_ids = []
-    if missing_ids:
-        LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
-        _missing_ids = list(missing_ids)
-        #
-        loop_num = 0
-        last_batch_size = batch_size
-        while last_batch_size == batch_size:
-            loop_num += 1
-            batch = _missing_ids[batch_size*(loop_num-1):batch_size*loop_num]
-            batch_result = db_session.query(db.Queue.appid).filter(
-                db.Queue.appid.in_(batch)
-            ).all()
-            # query returns [(id1,), (id2,), ...], so we need to flatten the list
-            available_ids.extend([row[0] for row in batch_result])
-            last_batch_size = len(batch)
-
-        missing_ids = missing_ids.difference(available_ids)
+    LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
 
     return missing_ids
 

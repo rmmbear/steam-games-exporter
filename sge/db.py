@@ -4,6 +4,8 @@ import time
 import uuid
 import logging
 
+from typing import Any, List
+
 import sqlalchemy
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
@@ -76,6 +78,7 @@ class GameInfo(ORM_BASE):
     # even when that information is normally present on the store page
     timestamp = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
     unavailable = sqlalchemy.Column(sqlalchemy.Boolean, nullable=False, default=False)
+    # database
 
     def __repr__(self) -> str:
         return "<GameInfo(appid='{}', name='{}', ... timestamp='{}', unavailable='{}')>".format(
@@ -88,7 +91,7 @@ class GameInfo(ORM_BASE):
         # info_json = json['<appid>']['data']
         #NOTE: steam_appid and appid are not guaranteed to be the same
         # (this is mostly the case for 'bonus' apps bundled with purchase)
-        # (for example, a single-player game can have a multi-player mode as a deparate app)
+        # (for example, a single-player game can have a multi-player mode as a separate app)
         # (this app's steam_appid will actually be the main app's appid)
         # (I assume this is to make it possible to have both apps have the same store page)
         #appid = appid
@@ -132,8 +135,23 @@ SESSION = scoped_session(SESSIONMAKER)
 def init(path: str) -> None:
     LOGGER.info("Performing db init")
     if path in ("", ":memory:"):
-        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={'check_same_thread':False}, poolclass=sqlalchemy.pool.StaticPool)
+        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False}, poolclass=sqlalchemy.pool.StaticPool)
     else:
-        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={'check_same_thread':False})
+        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False})
     SESSIONMAKER.configure(bind=engine)
     ORM_BASE.metadata.create_all(bind=engine)
+
+
+def in_query_chunked(query_target: ORM_BASE, filter_from: ORM_BASE,
+                     in_value: list, batch_size: int = 999) -> list:
+    db_session = SESSION()
+    query_return: List[Any] = []
+    loop_num = 0
+    last_batch_size = batch_size
+    while last_batch_size == batch_size:
+        loop_num += 1
+        batch = in_value[batch_size*(loop_num-1):batch_size*loop_num]
+        query_return.extend(db_session.query(query_target).filter(filter_from.in_(batch)).all())
+        last_batch_size = len(batch)
+
+    return query_return
