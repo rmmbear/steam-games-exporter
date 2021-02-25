@@ -50,14 +50,14 @@ JSON_TEMPLATE_GAMEINFO = """{
             "genres": [{"id": "23", "description": "Indie"},
                        {"id": "3", "description": "RPG"}],
             "release_date": {"coming_soon": false, "date": "00 Month, Year"},
-            "content_descriptors": {"ids": [], "notes": None}
+            "content_descriptors": {"ids": [], "notes": null}
         }
     }
 }"""
 
 
 class DummyAPISession(sge.APISession):
-    GENERATE_GAMES_NUM = 3000
+    GENERATE_GAMES_NUM = 2000
     USERS = {}
 
     def query(self, prepared_query: requests.PreparedRequest, *args, **kwargs) -> requests.Response:
@@ -311,6 +311,7 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     assert resp.status_code == 202
 
     assert db_session.query(db.Request).count() == 4
+    assert db_session.query(db.Queue).count() <= DummyAPISession.GENERATE_GAMES_NUM
 
     ###
     client.cookie_jar.clear()
