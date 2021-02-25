@@ -351,7 +351,7 @@ def export_games_simple(steamid: int, file_format: str
     return send_exported_file(games, file_format)
 
 
-def send_exported_file(export_data: List[List[Any]], export_format: int
+def send_exported_file(export_data: List[List[Any]], export_format: str
                       ) -> werkzeug.wrappers.Response:
     """"""
     try:
