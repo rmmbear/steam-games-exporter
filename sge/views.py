@@ -83,7 +83,7 @@ def finalize_request(resp: Any) -> None:
         LOGGER.info("Notifying fetcher thread of modified queue")
         flask.current_app.config["SGE_FETCHER_THREAD"].notify()
 
-    if "clear_job_cookie" in flask.g and "job_db_row" in flask.g:
+    if "clear_job_cookie" in flask.g:
         LOGGER.info("Clearing job cookie")
         resp.set_cookie(key="job", value="", expires=0, path="/tools/steam-games-exporter/",
                         secure=False, httponly=True, samesite="Lax")
