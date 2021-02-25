@@ -282,11 +282,14 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     db_session = db_session_fixture
 
     ### Simulate client sending multiple duplicate requests after losing job cookies
+    # also send a get after each post, to confirm the queu is not skipped
     client.cookie_jar.clear()
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1
     resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "xlsx", "include-gameinfo": True})
+    assert resp.status_code == 202
+    resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
 
     client.cookie_jar.clear()
@@ -295,6 +298,8 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "xls", "include-gameinfo": True})
     assert resp.status_code == 202
+    resp = client.get("/tools/steam-games-exporter/export")
+    assert resp.status_code == 202
 
     client.cookie_jar.clear()
     with client.session_transaction() as app_session:
@@ -302,12 +307,16 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "ods", "include-gameinfo": True})
     assert resp.status_code == 202
+    resp = client.get("/tools/steam-games-exporter/export")
+    assert resp.status_code == 202
 
     client.cookie_jar.clear()
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1
     resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "csv", "include-gameinfo": True})
+    assert resp.status_code == 202
+    resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
 
     assert db_session.query(db.Request).count() == 4
