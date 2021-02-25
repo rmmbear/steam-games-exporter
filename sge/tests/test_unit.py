@@ -1,5 +1,7 @@
+import os
 import time
 import logging
+import tempfile
 # ~ import http.cookiejar
 
 from typing import Dict
@@ -135,10 +137,16 @@ def app_client_fixture():
 @pytest.fixture
 def db_session_fixture(monkeypatch):
     """Initialize db and prevent the app from doing so again"""
-    db.init(":memory:")
-    monkeypatch.setattr(views.db, "init", lambda url: None)
-    yield db.SESSION()
-    sqlalchemy.orm.close_all_sessions()
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        db.init(tmp.name)
+        monkeypatch.setattr(views.db, "init", lambda url: None)
+        yield db.SESSION()
+        sqlalchemy.orm.close_all_sessions()
+    finally:
+        tmp.close()
+        os.unlink(tmp.name)
 
 
 def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
@@ -321,9 +329,6 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
 
     assert db_session.query(db.Request).count() == 4
     assert db_session.query(db.Queue).count() <= DummyAPISession.GENERATE_GAMES_NUM
-
-    ###
-    client.cookie_jar.clear()
 
 
 def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture):
