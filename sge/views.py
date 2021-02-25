@@ -325,42 +325,7 @@ def finalize_extended_export(profile_info: dict, requested_ids: List[int], expor
 
     del profile_info, games_info
 
-    try:
-        #TODO: figure out if pyexcel api supports chunked sequential write
-        #csv requires file in write mode, rest in binary write
-        tmp: Union[IO[str], IO[bytes]]
-        if export_format == "ods":
-            #FIXME: ods chokes on Nones in GameInfo table
-            # site-packages/pyexcel_ods3/odsw.py", line 38, in write_row
-            #   value_type = service.ODS_WRITE_FORMAT_COVERSION[type(cell)]
-            # KeyError: <class 'NoneType'>
-            # so much for the "don't worry about the format" part, eh?
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyods.save_data(tmp, {"GAMES":combined_games_data})
-        elif export_format == "xls":
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyxls.save_data(tmp, {"GAMES":combined_games_data})
-        elif export_format == "xlsx":
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyxlsx.save_data(tmp, {"GAMES":combined_games_data})
-        elif export_format == "csv":
-            tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
-            csv_writer = csv.writer(tmp, dialect="excel-tab")
-            for row in combined_games_data:
-                csv_writer.writerow(row)
-        else:
-            # this should be caught earlier in the flow, but _just in case_
-            raise ValueError(f"Unknown file format: {export_format}")
-
-        tmp.close()
-        flask.g.clear_job_cookie = True
-
-        file_response = flask.send_file(
-            tmp.name, as_attachment=True, attachment_filename=f"games.{export_format}")
-        return file_response
-    finally:
-        tmp.close()
-        os.unlink(tmp.name)
+    return send_exported_file(combined_games_data, export_format)
 
 
 def export_games_simple(steamid: int, file_format: str
@@ -383,30 +348,44 @@ def export_games_simple(steamid: int, file_format: str
         game_row[0] = "https://store.steampowered.com/app/{}".format(game_row[0])
         games.append(game_row)
 
+    return send_exported_file(games, file_format)
+
+
+def send_exported_file(export_data: List[List[Any]], export_format: int
+                      ) -> werkzeug.wrappers.Response:
+    """"""
     try:
+        #TODO: figure out if pyexcel api supports chunked sequential write
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
-        if file_format == "ods":
+        if export_format == "ods":
+            #FIXME: ods chokes on Nones in GameInfo table
+            # site-packages/pyexcel_ods3/odsw.py", line 38, in write_row
+            #   value_type = service.ODS_WRITE_FORMAT_COVERSION[type(cell)]
+            # KeyError: <class 'NoneType'>
+            # so much for the "don't worry about the format" part, eh?
             tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyods.save_data(tmp, {"GAMES":games})
-        elif file_format == "xls":
+            pyods.save_data(tmp, {"GAMES":export_data})
+        elif export_format == "xls":
             tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyxls.save_data(tmp, {"GAMES":games})
-        elif file_format == "xlsx":
+            pyxls.save_data(tmp, {"GAMES":export_data})
+        elif export_format == "xlsx":
             tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyxlsx.save_data(tmp, {"GAMES":games})
-        elif file_format == "csv":
+            pyxlsx.save_data(tmp, {"GAMES":export_data})
+        elif export_format == "csv":
             tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
             csv_writer = csv.writer(tmp, dialect="excel-tab")
-            for row in games:
+            for row in export_data:
                 csv_writer.writerow(row)
         else:
             # this should be caught earlier in the flow, but _just in case_
-            raise ValueError(f"Unknown file format: {file_format}")
+            raise ValueError(f"Unknown file format: {export_format}")
 
         tmp.close()
-        return flask.send_file(
-            tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
+        flask.g.clear_job_cookie = True
+        file_response = flask.send_file(
+            tmp.name, as_attachment=True, attachment_filename=f"games.{export_format}")
+        return file_response
     finally:
         tmp.close()
         os.unlink(tmp.name)
