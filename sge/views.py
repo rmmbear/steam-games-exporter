@@ -235,8 +235,39 @@ def export_games_extended(steamid: int, file_format: str
     games_json = profile_json["games"]
     new_request = db.Request(games_json, file_format)
     requested_ids = [row["appid"] for row in games_json]
-    available_ids = []
+
+    missing_ids = check_for_missing_ids(requested_ids)
+    if missing_ids:
+        queue = [new_request]
+        for appid in missing_ids:
+            queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
+                                  timestamp=int(time.time())))
+        messages = [
+            ("Processing",
+             MSG_QUEUE_CREATED.format(
+                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1)
+            )
+        ]
+        if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
+            messages.append(("Error", MSG_RATE_LIMITED))
+        resp = flask.make_response(
+            flask.render_template("error.html", refresh=10, messages=messages), 202)
+        resp.set_cookie(
+            "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
+            path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
+        )
+        db_session = db.SESSION()
+        db_session.bulk_save_objects(queue)
+        db_session.commit()
+        flask.g.queue_modified = True
+        return resp
+    #else: all necessary info already present in db, no need to persist the new request
+    return finalize_extended_export(new_request)
+
+
+def check_for_missing_ids(requested_ids: List[int]) -> set:
     db_session = db.SESSION()
+    available_ids = []
 
     batch_size = 999
     loop_num = 0
@@ -252,33 +283,26 @@ def export_games_extended(steamid: int, file_format: str
         last_batch_size = len(batch)
 
     missing_ids = set(requested_ids).difference(available_ids)
+    available_ids = []
     if missing_ids:
         LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
-        queue = [new_request]
-        for appid in missing_ids:
-            queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
-                                  timestamp=int(time.time())))
+        _missing_ids = list(missing_ids)
+        #
+        loop_num = 0
+        last_batch_size = batch_size
+        while last_batch_size == batch_size:
+            loop_num += 1
+            batch = _missing_ids[batch_size*(loop_num-1):batch_size*loop_num]
+            batch_result = db_session.query(db.Queue.appid).filter(
+                db.Queue.appid.in_(batch)
+            ).all()
+            # query returns [(id1,), (id2,), ...], so we need to flatten the list
+            available_ids.extend([row[0] for row in batch_result])
+            last_batch_size = len(batch)
 
-        messages = [
-            ("Processing",
-             MSG_QUEUE_CREATED.format(
-                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1)
-            )
-        ]
-        if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
-            messages.append(("Error", MSG_RATE_LIMITED))
-        resp = flask.make_response(
-            flask.render_template("error.html", refresh=10, messages=messages), 202)
-        resp.set_cookie(
-            "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
-            path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
-        )
-        db_session.bulk_save_objects(queue)
-        db_session.commit()
-        flask.g.queue_modified = True
-        return resp
-    #else: all necessary info already present in db, no need to persist the new request
-    return finalize_extended_export(new_request)
+        missing_ids = missing_ids.difference(available_ids)
+
+    return missing_ids
 
 
 def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
