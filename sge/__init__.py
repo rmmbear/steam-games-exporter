@@ -92,7 +92,7 @@ def cleanup(signal: int) -> None:
     LOGGER.info("Cleaning old requests")
     cutoff = int(time.time()) - COOKIE_MAX_AGE
     db_session = db.SESSION()
-    db_session.query(db.Request).filter(db.Request.timestamp >= cutoff).delete()
+    db_session.query(db.Request).filter(db.Request.timestamp <= cutoff).delete()
     db_session.commit()
     LOGGER.info("Vacuuming sqlite db")
     db_session.execute("VACUUM")
