@@ -125,7 +125,7 @@ def login_router() -> werkzeug.wrappers.Response:
         return login()
 
     if "job_db_row" in flask.g:
-        return finalize_extended_export(flask.g.job_db_row)
+        return check_extended_export(flask.g.job_db_row)
     if "steamid" in flask.session:
         return flask.redirect(flask.url_for("sge.games_export_config"))
 
@@ -165,7 +165,7 @@ def games_export_config() -> werkzeug.wrappers.Response:
     """Display and handle export config"""
     LOGGER.debug("Entering export config view")
     if "job_db_row" in flask.g:
-        return finalize_extended_export(flask.g.job_db_row)
+        return check_extended_export(flask.g.job_db_row)
 
     if "steamid" not in flask.session:
         return flask.redirect(flask.url_for("sge.index"))
@@ -179,7 +179,7 @@ def games_export_config() -> werkzeug.wrappers.Response:
         flask.g.clear_session = True
 
         if flask.request.form.get("include-gameinfo"):
-            return export_games_extended(steamid, flask.request.form["format"])
+            return prepare_extended_export(steamid, flask.request.form["format"])
 
         return export_games_simple(steamid, flask.request.form["format"])
 
@@ -211,13 +211,22 @@ def games_export_config() -> werkzeug.wrappers.Response:
 # csv doubly so because of its big file sizes
 
 
-def export_games_extended(steamid: int, file_format: str
-                         ) -> werkzeug.wrappers.Response:
-    """Initiate export, create all necessary db rows, return control to finalize_
-    Returns:
-        str - error page
-        Request - newly added db.Request row
-        flask response - successfully exported and began sending the file
+def check_for_missing_ids(requested_ids: List[int]) -> set:
+    """
+    """
+    available_ids = db.in_query_chunked(db.GameInfo.appid, db.GameInfo.appid, requested_ids)
+    # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
+    available_ids = [row[0] for row in available_ids]
+    missing_ids = set(requested_ids).difference(available_ids)
+    LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
+
+    return missing_ids
+
+
+def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers.Response:
+    """Initiate export, create all necessary db rows.
+    If all info is available, then finalize the export immediately
+    without persisting the request.
     """
     LOGGER.debug("started extended export")
     with sge.APISession() as s:
@@ -233,11 +242,11 @@ def export_games_extended(steamid: int, file_format: str
         return resp
 
     games_json = profile_json["games"]
-    new_request = db.Request(games_json, file_format)
-    requested_ids = [row["appid"] for row in games_json]
 
+    requested_ids = [row["appid"] for row in games_json]
     missing_ids = check_for_missing_ids(requested_ids)
     if missing_ids:
+        new_request = db.Request(games_json, file_format)
         queue = [new_request]
          # compare missing ids against currently queued ids
         queued_ids = db.in_query_chunked(db.Queue.appid, db.Queue.appid, list(missing_ids))
@@ -267,29 +276,15 @@ def export_games_extended(steamid: int, file_format: str
         flask.g.queue_modified = True
         return resp
     #else: all necessary info already present in db, no need to persist the new request
-    return finalize_extended_export(new_request)
+    return finalize_extended_export(games_json, requested_ids, file_format)
 
 
-def check_for_missing_ids(requested_ids: List[int]) -> set:
+def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
+    """Check if we can proceed with export."""
     db_session = db.SESSION()
-    available_ids = db.in_query_chunked(db.GameInfo.appid, db.GameInfo.appid, requested_ids)
-    # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
-    available_ids = [row[0] for row in available_ids]
-    missing_ids = set(requested_ids).difference(available_ids)
-    LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
-
-    return missing_ids
-
-
-def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
-    """Combine profile json with stored game info.
-    Returns:
-        str             -> error page / notification about ongoing export
-        flask response  -> successfully exported and began sending the file
-    """
-    db_session = db.SESSION()
-    missing_ids = len(check_for_missing_ids(
-        [row["appid"] for row in json.loads(request_job.games_json)]))
+    profile_info = json.loads(request_job.games_json)
+    requested_ids = [row["appid"] for row in profile_info]
+    missing_ids = len(check_for_missing_ids(requested_ids))
 
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
@@ -300,40 +295,41 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
             flask.render_template("error.html", refresh=10, messages=messages), 202)
         return resp
 
+    if "job_db_row" in flask.g:
+        #we're removing the request before it is finalized
+        # in case of an app error, the user will have to re-submit their request
+        db_session.delete(flask.g.job_db_row)
+        db_session.commit()
+
+    return finalize_extended_export(profile_info, requested_ids, request_job.export_format)
+
+
+def finalize_extended_export(profile_info: dict, requested_ids: List[int], export_format: str
+                            ) -> werkzeug.wrappers.Response:
+    """Combine profile json with stored game info."""
     LOGGER.debug("Finalizing extended export")
-    games_json = json.loads(request_job.games_json)
-    _games_info = [] #type: List[db.GameInfo]
-
-    batch_size = 999
-    loop_num = 0
-    last_batch_size = batch_size
-    while last_batch_size == batch_size:
-        loop_num += 1
-        batch = [row["appid"] for row in games_json[batch_size*(loop_num-1):batch_size*loop_num]]
-        _games_info.extend(db_session.query(db.GameInfo).filter(db.GameInfo.appid.in_(batch)).all())
-        last_batch_size = len(batch)
-
+    _games_info: List[db.GameInfo] = []
+    _games_info = db.in_query_chunked(db.GameInfo, db.GameInfo.appid, requested_ids)
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
     games_info = {row.appid:row for row in _games_info}
 
     # first row contains headers
     combined_games_data = [PROFILE_RELEVANT_FIELDS + GAMEINFO_RELEVANT_FIELDS]
     combined_games_data[0][0] = "store_url"
-    for json_row in games_json:
+    for json_row in profile_info:
         info = games_info[json_row["appid"]]
         data = [json_row[field] for field in PROFILE_RELEVANT_FIELDS]
         data.extend([getattr(info, field) for field in GAMEINFO_RELEVANT_FIELDS])
         data[0] = f"https://store.steampowered.com/app/{data[0]}"
         combined_games_data.append(data)
 
-    del games_json, games_info
+    del profile_info, games_info
 
-    file_format = request_job.export_format
     try:
         #TODO: figure out if pyexcel api supports chunked sequential write
         #csv requires file in write mode, rest in binary write
         tmp: Union[IO[str], IO[bytes]]
-        if file_format == "ods":
+        if export_format == "ods":
             #FIXME: ods chokes on Nones in GameInfo table
             # site-packages/pyexcel_ods3/odsw.py", line 38, in write_row
             #   value_type = service.ODS_WRITE_FORMAT_COVERSION[type(cell)]
@@ -341,30 +337,26 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
             # so much for the "don't worry about the format" part, eh?
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyods.save_data(tmp, {"GAMES":combined_games_data})
-        elif file_format == "xls":
+        elif export_format == "xls":
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyxls.save_data(tmp, {"GAMES":combined_games_data})
-        elif file_format == "xlsx":
+        elif export_format == "xlsx":
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyxlsx.save_data(tmp, {"GAMES":combined_games_data})
-        elif file_format == "csv":
+        elif export_format == "csv":
             tmp = tempfile.NamedTemporaryFile(mode="w", delete=False)
             csv_writer = csv.writer(tmp, dialect="excel-tab")
             for row in combined_games_data:
                 csv_writer.writerow(row)
         else:
             # this should be caught earlier in the flow, but _just in case_
-            raise ValueError(f"Unknown file format: {file_format}")
+            raise ValueError(f"Unknown file format: {export_format}")
 
         tmp.close()
-        if "job_db_row" in flask.g:
-            db_session.delete(flask.g.job_db_row)
-            db_session.commit()
-
         flask.g.clear_job_cookie = True
 
         file_response = flask.send_file(
-            tmp.name, as_attachment=True, attachment_filename=f"games.{file_format}")
+            tmp.name, as_attachment=True, attachment_filename=f"games.{export_format}")
         return file_response
     finally:
         tmp.close()
