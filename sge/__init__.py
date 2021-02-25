@@ -8,8 +8,8 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import flask
-
 import requests
+import sqlalchemy.orm
 
 from sge import db
 from sge import views
@@ -152,7 +152,7 @@ class GameInfoFetcher(threading.Thread):
         LOGGER.info("Fetcher thread started")
         db_session = db.SESSION()
         # 20 items = 30 seconds (at minimum) at 1.5s delay between requests
-        queue_query = db_session.query(db.Queue).order_by(db.Queue.timestamp).limit(20)
+        queue_query = sqlalchemy.orm.Query([db.Queue]).order_by(db.Queue.timestamp).limit(20)
         LOGGER.info("Starting shutdown notifier")
         self.shutdown_notifier.start()
         with APISession() as api_session:
@@ -162,10 +162,12 @@ class GameInfoFetcher(threading.Thread):
                     LOGGER.info("Terminating fetcher thread (idle)")
                     return
 
-                queue_batch = queue_query.all()
+                queue_batch = queue_query.with_session(db_session).all()
                 if not queue_batch:
                     LOGGER.debug("Nothing in the queue for fetcher, waiting")
+                    db.SESSION.remove()
                     self._wait()
+                    db_session = db.SESSION()
                     continue
 
                 LOGGER.debug("Processing batch")
@@ -181,8 +183,9 @@ class GameInfoFetcher(threading.Thread):
                     if not db_session.query(app_already_known).scalar():
                         try:
                             game_info = api_session.query_store(queue_item.appid)
-                            LOGGER.info("Adding app to db: %s", game_info)
                             db_session.add(game_info)
+                            db_session.delete(queue_item)
+                            db_session.commit()
                         except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as exc:
                             LOGGER.warning("Network error: %s", exc)
                             if exc.response and exc.response.status_code == 429:
@@ -200,13 +203,10 @@ class GameInfoFetcher(threading.Thread):
                             queue_item.timestamp = int(time.time())
                             db_session.commit()
                             self._wait(10, rate_limited=True)
-                            continue
+                            break
                     else:
                         LOGGER.warning("encountered queue item for an already known app (%s)",
                                        queue_item.appid)
-
-                    db_session.delete(queue_item)
-                    db_session.commit()
 
 
 class APISession():
