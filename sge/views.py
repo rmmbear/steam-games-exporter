@@ -288,9 +288,8 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         flask response  -> successfully exported and began sending the file
     """
     db_session = db.SESSION()
-    missing_ids = db_session.query(db.Queue).filter(
-        db.Queue.job_uuid == request_job.job_uuid
-    ).count()
+    missing_ids = len(check_for_missing_ids(
+        [row["appid"] for row in json.loads(request_job.games_json)]))
 
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
@@ -298,7 +297,7 @@ def finalize_extended_export(request_job: db.Request) -> werkzeug.wrappers.Respo
         if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", refresh=10, messages=messages), 200)
+            flask.render_template("error.html", refresh=10, messages=messages), 202)
         return resp
 
     LOGGER.debug("Finalizing extended export")
