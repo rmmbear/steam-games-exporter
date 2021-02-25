@@ -289,6 +289,7 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     client, app = app_client_fixture
     db_session = db_session_fixture
 
+
     ### Simulate client sending multiple duplicate requests after losing job cookies
     # also send a get after each post, to confirm the queu is not skipped
     client.cookie_jar.clear()
@@ -299,6 +300,7 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     assert resp.status_code == 202
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
+    assert app.config["SGE_FETCHER_THREAD"].is_alive()
 
     client.cookie_jar.clear()
     with client.session_transaction() as app_session:
