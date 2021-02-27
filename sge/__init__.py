@@ -1,4 +1,5 @@
-""""""
+"""
+"""
 import os
 import time
 import logging
@@ -16,7 +17,8 @@ from sge import views
 
 __VERSION__ = "0.2"
 
-LOG_FORMAT = logging.Formatter("[%(levelname)s] %(message)s")
+LOG_FORMAT = logging.Formatter("%(asctime)s [SGE][%(levelname)s]: %(message)s",
+                               "%Y-%m-%d %H:%M:%S")
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 TH = logging.StreamHandler()
@@ -53,7 +55,7 @@ ENV_TO_CONFIG = {
     "production": ConfigProduction,
     "development": ConfigDevelopment,
 }
-COOKIE_MAX_AGE = 172800 # 2 days
+COOKIE_MAX_AGE = 172800 # 2 days, chosen arbitrarily
 
 
 def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
@@ -111,8 +113,8 @@ class GameInfoFetcher(threading.Thread):
         def shutdown_notify(fetcher_thread: "GameInfoFetcher") -> None:
             # wait until main thread stops execution
             threading.main_thread().join()
-            # trigger termination event and wake our thread
-            LOGGER.info("Terminating fetcher thread")
+            # trigger termination event and wake fetcher thread
+            LOGGER.info("Requesting fetcher thread termination")
             fetcher_thread._terminate.set()
             fetcher_thread.notify(force=True)
 
@@ -164,7 +166,7 @@ class GameInfoFetcher(threading.Thread):
 
                 queue_batch = queue_query.with_session(db_session).all()
                 if not queue_batch:
-                    LOGGER.debug("Nothing in the queue for fetcher, waiting")
+                    LOGGER.info("Nothing in the queue for fetcher, waiting")
                     db.SESSION.remove()
                     self._wait()
                     db_session = db.SESSION()

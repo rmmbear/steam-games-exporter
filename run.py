@@ -5,13 +5,7 @@ import sys
 import shutil
 import logging
 import logging.handlers
-
-try:
-    # https://uwsgi-docs.readthedocs.io/en/latest/PythonModule.html
-    import uwsgi
-except ImportError:
-    # we're not running in uwsgi mode
-    pass
+from datetime import datetime
 
 # uwsgi emperor launches the app from within the venv
 # so path from which sge can be imported must be added manually
@@ -24,12 +18,17 @@ import sge
 STEAM_KEY = os.environ.get("STEAM_DEV_KEY")
 FLASK_ENV = os.environ.get("FLASK_ENV", default="production")
 DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
-# if path is not set, use in-memory sqlite db ("sqlite:///")
-MAILX = shutil.which("mailx")
+# if path is not set use in-memory sqlite db ("sqlite:///")
 
 APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV], steam_key=STEAM_KEY, db_path=DB_PATH)
 if "uwsgi" in locals():
+    # https://uwsgi-docs.readthedocs.io/en/latest/PythonModule.html
+    # uwsgi is inserted automatically into the module's namespace
+    #
+    # uwsgi docs do not mention what the strategy for chosing signal numbers should be
+    # their examples used seemingly random integers in the usable range (1-90)
     uwsgi.register_signal(10, "", sge.cleanup)
+    # cron job triggering signal 10 at 1am (server's local time)
     uwsgi.add_cron(10, 0, 1, -1, -1, -1)
 
     #FIXME: smtp logger WILL fail in event of network errors
@@ -42,6 +41,6 @@ if "uwsgi" in locals():
         subject="[Steam Games Exporter]", secure=None)
     MAIL_HANDLER.setLevel(logging.INFO)
     LOGGER.addHandler(MAIL_HANDLER)
-    LOGGER.info("Steam Games Exporter started successfully in uwsgi mode")
+    LOGGER.info("Steam Games Exporter started successfully in uwsgi mode (%s)", datetime.now())
     MAIL_HANDLER.setLevel(logging.ERROR)
     sge.LOGGER.addHandler(MAIL_HANDLER)
