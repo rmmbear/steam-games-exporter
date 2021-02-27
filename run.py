@@ -7,6 +7,12 @@ import logging
 import logging.handlers
 from datetime import datetime
 
+try:
+    import uwsgi
+except ImportError:
+    # https://uwsgi-docs.readthedocs.io/en/latest/PythonModule.html
+    pass
+
 # uwsgi emperor launches the app from within the venv
 # so path from which sge can be imported must be added manually
 sys.path.append(os.path.realpath(__file__).rsplit("/", maxsplit=1)[0])
@@ -22,9 +28,6 @@ DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
 
 APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV], steam_key=STEAM_KEY, db_path=DB_PATH)
 if "uwsgi" in locals():
-    # https://uwsgi-docs.readthedocs.io/en/latest/PythonModule.html
-    # uwsgi is inserted automatically into the module's namespace
-    #
     # uwsgi docs do not mention what the strategy for chosing signal numbers should be
     # their examples used seemingly random integers in the usable range (1-90)
     uwsgi.register_signal(10, "", sge.cleanup)
