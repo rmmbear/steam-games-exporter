@@ -2,7 +2,6 @@
 """
 import os
 import sys
-import shutil
 import logging
 import logging.handlers
 from datetime import datetime
