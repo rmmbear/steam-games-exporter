@@ -1,4 +1,5 @@
-""""""
+"""Flask views, blueprint definition, and spreadsheet export functions.
+"""
 import os
 import csv
 import json
@@ -24,7 +25,7 @@ LOGGER = logging.getLogger(__name__)
 
 MSG_MISSING_GAMES = "Cannot export data, could not find any games! " \
                     "Please make sure 'game details' in your " \
-                    "<a href=\"https://steamcommunity.com/my/edit/settings\">" \
+                    "<a href=\"https://steamcommunity.com/my/edit/settings\"> " \
                     "profile's privacy settings</a> is set to 'public'."
 MSG_NO_COOKIES = "If your browser is rejecting cookies (which are necessary for this app), " \
                  "please allow cookies from https://misc.untextured.space in your browser's " \
@@ -61,6 +62,9 @@ def init() -> None:
 
 @APP_BP.before_request
 def load_job() -> None:
+    """Check for job cookies, load corresponding job from db.
+    Mark the cookie for deletion if no match found in db.
+    """
     LOGGER.debug("Received request")
     job_uuid = flask.request.cookies.get("job")
     if job_uuid:
@@ -79,6 +83,9 @@ def load_job() -> None:
 
 @APP_BP.after_request
 def finalize_request(resp: Any) -> None:
+    """Notify fetcher thread of queue modifications (if any), and clear
+    no longer needed/valid cookies.
+    """
     if "queue_modified" in flask.g:
         LOGGER.info("Notifying fetcher thread of modified queue")
         flask.current_app.config["SGE_FETCHER_THREAD"].notify()
@@ -97,14 +104,16 @@ def finalize_request(resp: Any) -> None:
 
 @APP_BP.teardown_request
 def close_db_session(exc: Any) -> None:
-    """Close the scoped session during teardown"""
+    """Remove this thread's session."""
     LOGGER.debug("Request teardown")
     db.SESSION.remove()
 
 
 @APP_BP.route("/")
 def index() -> str:
-    """landing page"""
+    """Landing page.
+    Sets a session cookie to allow for cookie check later.
+    """
     LOGGER.debug("Entering index view")
     #cookie check
     if "c" not in flask.session:
@@ -119,6 +128,11 @@ def index() -> str:
 
 @APP_BP.route("/login", methods=['GET', 'POST'])
 def login_router() -> werkzeug.wrappers.Response:
+    """Routes the user to either login, export config or error page.
+    Separated from actual login() to avoid making premature requests
+    during OID provider discovery (this is done automatically in OID
+    loginhandler and cannot be avoided).
+    """
     LOGGER.debug("In login router")
     openid_complete = flask.request.args.get("openid_complete")
     if openid_complete:
@@ -154,7 +168,9 @@ def login() -> werkzeug.wrappers.Response:
 
 @OID.after_login
 def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Response:
-    """called automatically instead of login() after successful authentication"""
+    """Called automatically instead of login() after successful
+    authentication.
+    """
     LOGGER.debug("creating new session")
     flask.session["steamid"] = resp.identity_url.rsplit("/", maxsplit=1)[-1]
     return flask.redirect(flask.url_for("sge.games_export_config"))
@@ -162,7 +178,7 @@ def create_session(resp: flask_openid.OpenIDResponse) -> werkzeug.wrappers.Respo
 
 @APP_BP.route("/export", methods=("GET", "POST"))
 def games_export_config() -> werkzeug.wrappers.Response:
-    """Display and handle export config"""
+    """Display and handle export config."""
     LOGGER.debug("Entering export config view")
     if "job_db_row" in flask.g:
         return check_extended_export(flask.g.job_db_row)
@@ -212,7 +228,8 @@ def games_export_config() -> werkzeug.wrappers.Response:
 
 
 def check_for_missing_ids(requested_ids: List[int]) -> set:
-    """
+    """Check if the request being handled has any appids still in the
+    Queue. Returns list of integers (appids).
     """
     available_ids = db.in_query_chunked(db.GameInfo.appid, db.GameInfo.appid, requested_ids)
     # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
@@ -224,7 +241,7 @@ def check_for_missing_ids(requested_ids: List[int]) -> set:
 
 
 def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers.Response:
-    """Initiate export, create all necessary db rows.
+    """Initiate export, create new request and queue items if necessary.
     If all info is available, then finalize the export immediately
     without persisting the request.
     """
@@ -280,12 +297,14 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
 
 
 def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
-    """Check if we can proceed with export."""
+    """Check if we can proceed with export for previously recorded job.
+    """
     db_session = db.SESSION()
     profile_info = json.loads(request_job.games_json)
     requested_ids = [row["appid"] for row in profile_info]
     missing_ids = len(check_for_missing_ids(requested_ids))
 
+    #FIXME: communicate properly that there might be other profiles in the queue
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         messages = [("Processing", MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids))]
@@ -330,7 +349,7 @@ def finalize_extended_export(profile_info: dict, requested_ids: List[int], expor
 
 def export_games_simple(steamid: int, file_format: str
                        ) -> werkzeug.wrappers.Response:
-    """Simple export without game info"""
+    """Simple export without game info."""
     with sge.APISession() as s:
         profile_json = s.query_profile(steamid)
 
@@ -353,7 +372,9 @@ def export_games_simple(steamid: int, file_format: str
 
 def send_exported_file(export_data: List[List[Any]], export_format: str
                       ) -> werkzeug.wrappers.Response:
-    """"""
+    """Export and save provided data into a temporary file and send that
+    to the client.
+    """
     try:
         #TODO: figure out if pyexcel api supports chunked sequential write
         #csv requires file in write mode, rest in binary write

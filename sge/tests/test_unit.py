@@ -403,7 +403,6 @@ def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture, mo
         assert not [cookie for cookie in client.cookie_jar if cookie.name == "job"]
         assert resp.status_code == 302
 
-
     # client whose request was not cleared can make further requests without issues
     # their cookies are not cleared, they are not redirected
     client.set_cookie(
@@ -413,7 +412,6 @@ def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture, mo
     assert [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]. \
         value == requests[3]
     assert resp.status_code == 202
-
 
     # expire the remaining request
     db_session.query(db.Request).update(

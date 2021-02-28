@@ -1,10 +1,11 @@
+"""Database model."""
 import re
 import json
 import time
 import uuid
 import logging
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 import sqlalchemy
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -17,6 +18,9 @@ ORM_BASE: DeclarativeMeta = declarative_base()
 
 #TODO: naming collision with all the networking/server stuff, find a better name
 class Request(ORM_BASE):
+    """Table containing all requests which could not be fulfilled
+    immediately.
+    """
     __tablename__ = "requests_queue"
     job_uuid = sqlalchemy.Column(sqlalchemy.String, primary_key=True)
     timestamp = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
@@ -42,6 +46,7 @@ class Request(ORM_BASE):
 
 
 class Queue(ORM_BASE):
+    """Table serving as a queue for the game info fetcher."""
     __tablename__ = "games_queue"
     appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     job_uuid = sqlalchemy.Column(sqlalchemy.String)
@@ -57,6 +62,8 @@ class Queue(ORM_BASE):
 
 
 class GameInfo(ORM_BASE):
+    """Table containing all relevant information about requested games.
+    """
     __tablename__ = "games_info"
     appid = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     name = sqlalchemy.Column(sqlalchemy.String)
@@ -78,7 +85,6 @@ class GameInfo(ORM_BASE):
     # even when that information is normally present on the store page
     timestamp = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
     unavailable = sqlalchemy.Column(sqlalchemy.Boolean, nullable=False, default=False)
-    # database
 
     def __repr__(self) -> str:
         return "<GameInfo(appid='{}', name='{}', ... timestamp='{}', unavailable='{}')>".format(
@@ -87,6 +93,9 @@ class GameInfo(ORM_BASE):
 
     @classmethod
     def from_json(cls, appid: int, info_json: dict) -> "GameInfo":
+        """Create new row from dumped json, as returned by
+        sge.APISession.query().
+        """
         #{'<appid>': {'success': <bool>, 'data': {'steam_appid':<steam_appid>, ...}}}
         # info_json = json['<appid>']['data']
         #NOTE: steam_appid and appid are not guaranteed to be the same
@@ -97,6 +106,7 @@ class GameInfo(ORM_BASE):
         #appid = appid
         name = info_json["name"]
         type = info_json["type"]
+        developers: Optional[str]
         if "developers" in info_json:
             developers = ",\n".join(info_json["developers"])
         else:
@@ -110,11 +120,13 @@ class GameInfo(ORM_BASE):
         supported_languages = re.sub(RE_SIMPLE_HTML, "", supported_languages)
         controller_support = info_json.get("controller_support", "")
         age_gate = info_json["required_age"]
+        categories: Optional[str]
         if "categories" in info_json:
             categories = ",\n".join(
                 [category["description"] for category in info_json["categories"]])
         else:
             categories = None
+        genres: Optional[str]
         if "genres" in info_json:
             genres = ",\n".join(genre["description"] for genre in info_json["genres"])
         else:
@@ -133,6 +145,8 @@ SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
 SESSION = scoped_session(SESSIONMAKER)
 
 def init(path: str) -> None:
+    """Configure the engine, bind it to the sessionmaker, create tables.
+    """
     LOGGER.info("Performing db init")
     if path in ("", ":memory:"):
         engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False}, poolclass=sqlalchemy.pool.StaticPool)
@@ -144,6 +158,9 @@ def init(path: str) -> None:
 
 def in_query_chunked(query_target: ORM_BASE, filter_from: ORM_BASE,
                      in_value: list, batch_size: int = 999) -> list:
+    """Perform sqlalchemy in_() operation on the query, but in chunks to
+    avoid triggering the 'too many SQLite variables' error.
+    """
     db_session = SESSION()
     query_return: List[Any] = []
     loop_num = 0

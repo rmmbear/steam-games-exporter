@@ -1,5 +1,4 @@
-"""This is only for the benefit of uwsgi emperor
-"""
+"""Convenience module for easier uWSGI integration."""
 import os
 import sys
 import logging

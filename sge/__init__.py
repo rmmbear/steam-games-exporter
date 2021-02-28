@@ -1,10 +1,13 @@
+"""Steam Games Exporter
+This package is meant to be run by uwsgi emperor.
+See vassal.ini for details on uwsgi configuration.
 """
-"""
+__VERSION__ = "0.2"
+
 import os
 import time
 import logging
 import threading
-
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -14,8 +17,6 @@ import sqlalchemy.orm
 
 from sge import db
 from sge import views
-
-__VERSION__ = "0.2"
 
 LOG_FORMAT = logging.Formatter("%(asctime)s [SGE][%(levelname)s]: %(message)s",
                                "%Y-%m-%d %H:%M:%S")
@@ -28,6 +29,7 @@ LOGGER.addHandler(TH)
 
 
 class ConfigProduction():
+    """Object holding config variables for production environment."""
     #APPLICATION_ROOT = "/tools/steam-games-exporter/"
     MAX_CONTENT_LENGTH = 512*1024
     # key is generated each time app is launched
@@ -42,6 +44,7 @@ class ConfigProduction():
 
 
 class ConfigDevelopment():
+    """Object holding config variables for development environment."""
     DEBUG = True
     MAX_CONTENT_LENGTH = ConfigProduction.MAX_CONTENT_LENGTH
     SECRET_KEY = "devkey"
@@ -59,6 +62,9 @@ COOKIE_MAX_AGE = 172800 # 2 days, chosen arbitrarily
 
 
 def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
+    """Create flask app, configure it, and register blueprint from
+    sge/views.py
+    """
     cwd = os.path.realpath(__file__).rsplit("/", maxsplit=1)[0]
     app = flask.Flask(
         __name__,
@@ -102,8 +108,7 @@ def cleanup(signal: int) -> None:
 
 
 class GameInfoFetcher(threading.Thread):
-    """Background thread for processing db.Queue.
-    """
+    """Background thread for processing db.Queue."""
     def __init__(self) -> None:
         super().__init__(target=None, name="store_info_fetcher", daemon=False)
         self.condition = threading.Condition()
@@ -111,6 +116,7 @@ class GameInfoFetcher(threading.Thread):
         self.rate_limited = False
 
         def shutdown_notify(fetcher_thread: "GameInfoFetcher") -> None:
+            """Tell fetcher to terminate when main thread stops."""
             # wait until main thread stops execution
             threading.main_thread().join()
             # trigger termination event and wake fetcher thread
@@ -124,6 +130,10 @@ class GameInfoFetcher(threading.Thread):
 
 
     def _wait(self, timeout: Optional[int] = None, rate_limited: bool = False) -> None:
+        """Put the thread to sleep.
+        Thread will sleep until notified with notify(), or timeout is
+        reached. Do _not_ call from outside this thread.
+        """
         LOGGER.debug("Fetcher thread waiting. timeout=%s, rate_limited=%s", timeout, rate_limited)
         if not timeout and rate_limited:
             raise ValueError("Timeout must be specified when rate_limit is True")
@@ -138,8 +148,7 @@ class GameInfoFetcher(threading.Thread):
 
 
     def notify(self, force: bool = False) -> None:
-        """Wake the thread to resume queue processing
-        """
+        """Wake the thread to resume queue processing."""
         if not self.rate_limited or (force and self.rate_limited):
             try:
                 self.condition.acquire()
@@ -243,23 +252,32 @@ class APISession():
 
 
     def query_store(self, appid: int) -> db.GameInfo:
+        """Fetch information about app from steam store api.
+        Will attempt to retry the request in case of recoverable errors.
+        Caller should expect at least HTTP errors (see query()).
+        """
         _query = requests.Request("GET", self.API_STORE_URL.format(appid=appid))
         prepared_query = self.requests_session.prepare_request(_query)
         store_json = self.query(prepared_query, max_retries=2, min_delay=1.5).json()[str(appid)]
 
         if not store_json["success"]:
-            LOGGER.warning("Invalid appid or app not available from our region: (%s)", appid)
+            LOGGER.warning("Invalid appid or app not available from our region: %s", appid)
             return db.GameInfo(appid=appid, timestamp=int(time.time()), unavailable=True)
 
         return db.GameInfo.from_json(appid=appid, info_json=store_json["data"])
 
 
     def query_profile(self, steamid: int) -> Optional[dict]:
+        """Fetch information about app from steam store api.
+        Errors are raised immediately, no retries even in case of
+        recoverable HTTP errs. Caller should expect at least HTTP errors
+        (see query()).
+        """
         steam_key = flask.current_app.config["SGE_STEAM_DEV_KEY"]
         _query = requests.Request("GET", self.API_GAMES_URL.format(key=steam_key, steamid=steamid))
         prepared_query = self.requests_session.prepare_request(_query)
 
-        games_json = self.query(prepared_query, max_retries=0, min_delay=1).json()["response"]
+        games_json = self.query(prepared_query, max_retries=0, min_delay=0).json()["response"]
         if not games_json:
             return None
         return games_json
