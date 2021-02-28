@@ -5,7 +5,7 @@ import time
 import logging
 import threading
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 import flask
@@ -214,7 +214,6 @@ class GameInfoFetcher(threading.Thread):
 class APISession():
     """Simple context manager taking advantage of connection pooling"""
     user_agent = f"SteamGamesFetcher/{__VERSION__} (+https://github.com/rmmbear)"
-    STORE_DELAY = 1.5
     # https://partner.steamgames.com/doc/webapi_overview/responses
     KNOWN_API_RESPONSES = [200, 400, 401, 403, 404, 405, 429, 500, 503]
     # https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI#appdetails
@@ -230,7 +229,7 @@ class APISession():
     def __init__(self) -> None:
         self.requests_session = requests.Session()
         self.requests_session.headers["User-Agent"] = self.user_agent
-        self.last_store_access = .0
+        self.access_times: Dict[str, float] = {}
 
 
     def __enter__(self) -> "APISession":
@@ -246,7 +245,7 @@ class APISession():
     def query_store(self, appid: int) -> db.GameInfo:
         _query = requests.Request("GET", self.API_STORE_URL.format(appid=appid))
         prepared_query = self.requests_session.prepare_request(_query)
-        store_json = self.query(prepared_query, max_retries=2).json()[str(appid)]
+        store_json = self.query(prepared_query, max_retries=2, min_delay=1.5).json()[str(appid)]
 
         if not store_json["success"]:
             LOGGER.warning("Invalid appid or app not available from our region: (%s)", appid)
@@ -260,25 +259,29 @@ class APISession():
         _query = requests.Request("GET", self.API_GAMES_URL.format(key=steam_key, steamid=steamid))
         prepared_query = self.requests_session.prepare_request(_query)
 
-        games_json = self.query(prepared_query, max_retries=0).json()["response"]
+        games_json = self.query(prepared_query, max_retries=0, min_delay=1).json()["response"]
         if not games_json:
             return None
         return games_json
 
 
-    def query(self, prepared_query: requests.PreparedRequest, max_retries: int = 2
-             ) -> requests.Response:
-        """Error handling helper"""
+    def query(self, prepared_query: requests.PreparedRequest, max_retries: int = 2,
+              min_delay: float = 0, timeout: int = 15) -> requests.Response:
+        """Error handling helper.
+        max_retries - how many times to re-attempt the query after encountering errors
+        min_delay   - minimum amount of time that needs to pass before making subsequent
+                      requests to given address. Last access time stored in self.access_times,
+                      a dict whose keys are made from netloc part of urlparse(prepared_query.url)
+        timeout     - max time in seconds to spend waiting for request to finish
+        """
+        netloc = str(urlparse(prepared_query.url).netloc)
         exp_delay = [2**x for x in range(max_retries)]
         retry_count = 0
         while True:
             try:
-                #FIXME: apply this only to requests to store api
-                # this doesn't really matter because we only make one request to the profile
-                # endpoint, but this should be fixed regardless
-                time.sleep(max(0, self.STORE_DELAY + self.last_store_access - time.time()))
-                self.last_store_access = time.time()
-                response = self.requests_session.send(prepared_query, stream=True, timeout=15)
+                time.sleep(max(0, self.access_times.get(netloc, .0) + min_delay - time.time()))
+                self.access_times[netloc] = time.time()
+                response = self.requests_session.send(prepared_query, stream=True, timeout=timeout)
                 response.raise_for_status()
                 return response
             except requests.HTTPError:
@@ -302,7 +305,7 @@ class APISession():
                     "Unexpected request exception: %s" \
                     "\nrequest url = %s" \
                     "\nrequest headers = %s",
-                    err, urlparse(prepared_query.url).netloc, prepared_query.headers
+                    err, netloc, prepared_query.headers
                 )
                 raise err
 
