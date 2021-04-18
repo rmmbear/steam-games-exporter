@@ -2,7 +2,6 @@ import os
 import time
 import logging
 import tempfile
-import http.cookiejar
 
 from typing import Dict
 from urllib.parse import urlparse
@@ -134,9 +133,17 @@ def api_session_fixture(monkeypatch):
 @pytest.fixture
 def app_client_fixture():
     """Create new app instance"""
-    app = sge.create_app(sge.ConfigDevelopment, steam_key="", db_path=":memory:")
-    with app.test_client() as client:
-        yield client, app
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        app = sge.create_app(sge.ConfigDevelopment, steam_key="", db_path=tmp.name)
+        with app.test_client() as client:
+            yield client, app
+
+        sqlalchemy.orm.close_all_sessions()
+    finally:
+        tmp.close()
+        os.unlink(tmp.name)
 
 
 @pytest.fixture
@@ -145,18 +152,18 @@ def db_session_fixture(monkeypatch):
     try:
         tmp = tempfile.NamedTemporaryFile(delete=False)
         tmp.close()
-        db.init(tmp.name)
-        monkeypatch.setattr(views.db, "init", lambda url: None)
-        yield db.SESSION()
+        db_session = db.init(tmp.name)
+        monkeypatch.setattr(views.db, "init", lambda url: db_session)
+        yield db_session()
         sqlalchemy.orm.close_all_sessions()
     finally:
         tmp.close()
         os.unlink(tmp.name)
 
 
-def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
+def test_routing(app_client_fixture, monkeypatch):
     """"""
-    client, _ = app_client_fixture
+    client, app = app_client_fixture
 
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
@@ -219,9 +226,9 @@ def test_routing(app_client_fixture, db_session_fixture, monkeypatch):
     assert not resp.headers.get("Location")
 
 
-def test_extended_export(api_session_fixture, app_client_fixture, db_session_fixture):
+def test_extended_export(api_session_fixture, app_client_fixture):
     client, app = app_client_fixture
-    db_session = db_session_fixture
+    db_session = app.config["SGE_SCOPED_SESSION"]()
 
     # disable fetcher thread by overriding its start method
     # we're manually adding all the entries and don't want fetcher to interfere
@@ -281,10 +288,9 @@ def test_extended_export(api_session_fixture, app_client_fixture, db_session_fix
     assert resp.status_code == 200
 
 
-def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fixture, monkeypatch):
+def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     client, app = app_client_fixture
-    db_session = db_session_fixture
-
+    db_session = app.config["SGE_SCOPED_SESSION"]()
     gameinfo_fetcher = app.config["SGE_FETCHER_THREAD"]
 
     ### Simulate client sending multiple duplicate requests after losing job cookies
@@ -325,7 +331,7 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     assert resp.status_code == 202
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
-
+    assert gameinfo_fetcher.is_alive()
     assert db_session.query(db.Request).count() == 4
     # wait until the thread terminates
     gameinfo_fetcher._terminate.set()
@@ -343,12 +349,13 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, db_session_fi
     assert queue_length + gameinfo_length <= DummyAPISession.GENERATE_GAMES_NUM + 20
 
 
-def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture, monkeypatch):
+def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
+    _ = api_session_fixture
     client, app = app_client_fixture
-    db_session = db_session_fixture
+    db_session = app.config["SGE_SCOPED_SESSION"]()
 
-    #prevent fetcher thread from starting
-    app.config["SGE_FETCHER_THREAD"].start = lambda: None
+    #prevent fetcher thread from interfering
+    app.config["SGE_FETCHER_THREAD"]._terminate.set()
 
     ### cleaner runs without issues in empty db
     assert db_session.query(db.GameInfo).count() == 0
@@ -416,8 +423,8 @@ def test_cleanup(api_session_fixture, app_client_fixture, db_session_fixture, mo
     # expire the remaining request
     db_session.query(db.Request).update(
         {db.Request.timestamp: int(time.time()) - sge.COOKIE_MAX_AGE},
-            synchronize_session=False
-        )
+        synchronize_session=False
+    )
     db_session.commit()
 
     with app.app_context():

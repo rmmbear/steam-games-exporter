@@ -13,7 +13,7 @@ from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
 
 LOGGER = logging.getLogger(__name__)
 
-RE_SIMPLE_HTML = re.compile("<.*?>")
+RE_SIMPLE_HTML = re.compile(r"<.*?>")
 ORM_BASE: DeclarativeMeta = declarative_base()
 
 #TODO: naming collision with all the networking/server stuff, find a better name
@@ -141,27 +141,34 @@ class GameInfo(ORM_BASE):
         return new_obj
 
 
-SESSIONMAKER = sessionmaker(autocommit=False, autoflush=False)
-SESSION = scoped_session(SESSIONMAKER)
-
-def init(path: str) -> None:
+def init(path: str) -> sqlalchemy.orm.scoped_session:
     """Configure the engine, bind it to the sessionmaker, create tables.
     """
     LOGGER.info("Performing db init")
+
     if path in ("", ":memory:"):
-        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False}, poolclass=sqlalchemy.pool.StaticPool)
+        LOGGER.info("Initializing an in-memory database")
+        engine = sqlalchemy.create_engine(
+            f"sqlite:///{path}", echo=False, poolclass=sqlalchemy.pool.StaticPool,
+            connect_args={"check_same_thread":False}
+        )
     else:
-        engine = sqlalchemy.create_engine(f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False})
-    SESSIONMAKER.configure(bind=engine)
+        engine = sqlalchemy.create_engine(
+            f"sqlite:///{path}", echo=False, connect_args={"check_same_thread":False}
+        )
+
+    configured_sessionmaker = sessionmaker(engine, autocommit=False, autoflush=False)
+    scoped_session_proxy = scoped_session(configured_sessionmaker)
     ORM_BASE.metadata.create_all(bind=engine)
 
+    return scoped_session_proxy
 
-def in_query_chunked(query_target: ORM_BASE, filter_from: ORM_BASE,
-                     in_value: list, batch_size: int = 999) -> list:
+
+def in_query_chunked(db_session: sqlalchemy.orm.Session, query_target: ORM_BASE,
+                     filter_from: ORM_BASE, in_value: list, batch_size: int = 999) -> list:
     """Perform sqlalchemy in_() operation on the query, but in chunks to
     avoid triggering the 'too many SQLite variables' error.
     """
-    db_session = SESSION()
     query_return: List[Any] = []
     loop_num = 0
     last_batch_size = batch_size

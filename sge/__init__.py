@@ -30,7 +30,6 @@ LOGGER.addHandler(TH)
 
 class ConfigProduction():
     """Object holding config variables for production environment."""
-    #APPLICATION_ROOT = "/tools/steam-games-exporter/"
     MAX_CONTENT_LENGTH = 512*1024
     # key is generated each time app is launched
     # sessions are short-lived and app state does not depend on them
@@ -76,7 +75,9 @@ def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
     app.config.from_object(app_config)
     # extend config with instance-specific variables
     app.config["SGE_DB_PATH"] = db_path
-    app.config["SGE_FETCHER_THREAD"] = GameInfoFetcher()
+    app.config["SGE_SCOPED_SESSION"] = db.init(db_path)
+    app.config["SGE_FETCHER_THREAD"] = GameInfoFetcher(app.config["SGE_SCOPED_SESSION"])
+    app.config["SGE_FETCHER_THREAD"].start()
     app.config["SGE_STEAM_DEV_KEY"] = steam_key
 
     app.register_blueprint(views.APP_BP)
@@ -94,26 +95,29 @@ def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
 
 def cleanup(signal: int) -> None:
     """Remove old requests and vacuum the database.
-    This command is intended to be called by uwsgi cron every day (see run.py).
+    This command is intended to be called by uwsgi cron every day
+    (see run.py).
     """
     LOGGER.debug("Received uwsgi signal %s", signal)
     LOGGER.info("Cleaning old requests")
     cutoff = int(time.time()) - COOKIE_MAX_AGE
-    db_session = db.SESSION()
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     db_session.query(db.Request).filter(db.Request.timestamp <= cutoff).delete()
     db_session.commit()
+
     LOGGER.info("Vacuuming sqlite db")
     db_session.execute("VACUUM")
-    db.SESSION.remove()
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"].remove()
 
 
 class GameInfoFetcher(threading.Thread):
     """Background thread for processing db.Queue."""
-    def __init__(self) -> None:
+    def __init__(self, db_session_proxy) -> None:
         super().__init__(target=None, name="store_info_fetcher", daemon=False)
         self.condition = threading.Condition()
         self._terminate = threading.Event()
         self.rate_limited = False
+        self.scoped_session = db_session_proxy
 
         def shutdown_notify(fetcher_thread: "GameInfoFetcher") -> None:
             """Tell fetcher to terminate when main thread stops."""
@@ -161,7 +165,7 @@ class GameInfoFetcher(threading.Thread):
     def run(self) -> None:
         """Continuously fetch game info until main thread stops."""
         LOGGER.info("Fetcher thread started")
-        db_session = db.SESSION()
+        db_session = self.scoped_session()
         # 20 items = 30 seconds (at minimum) at 1.5s delay between requests
         queue_query = sqlalchemy.orm.Query([db.Queue]).order_by(db.Queue.timestamp).limit(20)
         LOGGER.info("Starting shutdown notifier")
@@ -169,22 +173,22 @@ class GameInfoFetcher(threading.Thread):
         with APISession() as api_session:
             while True:
                 if self._terminate.is_set():
-                    db.SESSION.remove()
+                    self.scoped_session.remove()
                     LOGGER.info("Terminating fetcher thread (idle)")
                     return
 
                 queue_batch = queue_query.with_session(db_session).all()
                 if not queue_batch:
                     LOGGER.info("Nothing in the queue for fetcher, waiting")
-                    db.SESSION.remove()
+                    self.scoped_session.remove()
                     self._wait()
-                    db_session = db.SESSION()
+                    db_session = self.scoped_session()
                     continue
 
                 LOGGER.debug("Processing batch")
                 for queue_item in queue_batch:
                     if self._terminate.is_set():
-                        db.SESSION.remove()
+                        self.scoped_session.remove()
                         LOGGER.info("Terminating fetcher thread (processing)")
                         return
 

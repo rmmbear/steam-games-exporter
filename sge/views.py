@@ -52,14 +52,6 @@ OID = flask_openid.OpenID()
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 
 
-@APP_BP.before_app_first_request
-def init() -> None:
-    """Create engine, bind it to sessionmaker, and create tables"""
-    LOGGER.info("Received first request, Initializing db")
-    db.init(flask.current_app.config["SGE_DB_PATH"])
-    flask.current_app.config["SGE_FETCHER_THREAD"].start()
-
-
 @APP_BP.before_request
 def load_job() -> None:
     """Check for job cookies, load corresponding job from db.
@@ -67,10 +59,11 @@ def load_job() -> None:
     """
     LOGGER.debug("Received request")
     job_uuid = flask.request.cookies.get("job")
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     if job_uuid:
         #FIXME: delay query until the resource is actually needed
         LOGGER.debug("Found job cookie %s", job_uuid)
-        job_db_row = db.SESSION().query(db.Request).filter(
+        job_db_row = db_session.query(db.Request).filter(
             db.Request.job_uuid == job_uuid
         ).first()
         if job_db_row:
@@ -84,7 +77,7 @@ def load_job() -> None:
 @APP_BP.after_request
 def finalize_request(resp: Any) -> None:
     """Notify fetcher thread of queue modifications (if any), and clear
-    no longer needed/valid cookies.
+    no longer needed/invalid cookies.
     """
     if "queue_modified" in flask.g:
         LOGGER.info("Notifying fetcher thread of modified queue")
@@ -106,7 +99,7 @@ def finalize_request(resp: Any) -> None:
 def close_db_session(exc: Any) -> None:
     """Remove this thread's session."""
     LOGGER.debug("Request teardown")
-    db.SESSION.remove()
+    flask.current_app.config["SGE_SCOPED_SESSION"].remove()
 
 
 @APP_BP.route("/")
@@ -231,7 +224,9 @@ def check_for_missing_ids(requested_ids: List[int]) -> set:
     """Check if the request being handled has any appids still in the
     Queue. Returns list of integers (appids).
     """
-    available_ids = db.in_query_chunked(db.GameInfo.appid, db.GameInfo.appid, requested_ids)
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
+    available_ids = db.in_query_chunked(
+        db_session, db.GameInfo.appid, db.GameInfo.appid, requested_ids)
     # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
     available_ids = [row[0] for row in available_ids]
     missing_ids = set(requested_ids).difference(available_ids)
@@ -262,11 +257,14 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
 
     requested_ids = [row["appid"] for row in games_json]
     missing_ids = check_for_missing_ids(requested_ids)
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     if missing_ids:
         new_request = db.Request(games_json, file_format)
         queue = [new_request]
          # compare missing ids against currently queued ids
-        queued_ids = db.in_query_chunked(db.Queue.appid, db.Queue.appid, list(missing_ids))
+        queued_ids = db.in_query_chunked(
+            db_session, db.Queue.appid, db.Queue.appid, list(missing_ids)
+        )
         queued_ids = [row[0] for row in queued_ids]
         missing_ids = missing_ids.difference(queued_ids)
         LOGGER.debug("%s missing ids after comparing with queue", len(missing_ids))
@@ -287,7 +285,7 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
             "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
             path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
         )
-        db_session = db.SESSION()
+        db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
         db_session.bulk_save_objects(queue)
         db_session.commit()
         flask.g.queue_modified = True
@@ -299,7 +297,7 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
 def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response:
     """Check if we can proceed with export for previously recorded job.
     """
-    db_session = db.SESSION()
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     profile_info = json.loads(request_job.games_json)
     requested_ids = [row["appid"] for row in profile_info]
     missing_ids = len(check_for_missing_ids(requested_ids))
@@ -327,8 +325,9 @@ def finalize_extended_export(profile_info: dict, requested_ids: List[int], expor
                             ) -> werkzeug.wrappers.Response:
     """Combine profile json with stored game info."""
     LOGGER.debug("Finalizing extended export")
+    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     _games_info: List[db.GameInfo] = []
-    _games_info = db.in_query_chunked(db.GameInfo, db.GameInfo.appid, requested_ids)
+    _games_info = db.in_query_chunked(db_session, db.GameInfo, db.GameInfo.appid, requested_ids)
     #associate each db.GameInfo object with its appid in a dict for easier and quicker lookup
     games_info = {row.appid:row for row in _games_info}
 
