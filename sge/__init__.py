@@ -11,8 +11,13 @@ import threading
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+# enable 2.0 removal warnings
+# https://docs.sqlalchemy.org/en/14/core/exceptions.html#sqlalchemy.exc.RemovedIn20Warning
+os.environ["SQLALCHEMY_WARN_20"] = '1'
+
 import flask
 import requests
+import sqlalchemy
 import sqlalchemy.orm
 
 from sge import db
@@ -106,7 +111,7 @@ def cleanup(signal: int) -> None:
     db_session.commit()
 
     LOGGER.info("Vacuuming sqlite db")
-    db_session.execute("VACUUM")
+    db_session.execute(sqlalchemy.text("VACUUM"))
     db_session = flask.current_app.config["SGE_SCOPED_SESSION"].remove()
 
 

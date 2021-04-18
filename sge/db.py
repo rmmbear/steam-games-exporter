@@ -9,12 +9,12 @@ from typing import Any, List, Optional
 
 import sqlalchemy
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
+from sqlalchemy.orm.decl_api import DeclarativeMeta
 
 LOGGER = logging.getLogger(__name__)
 
 RE_SIMPLE_HTML = re.compile(r"<.*?>")
-ORM_BASE: DeclarativeMeta = declarative_base()
+ORM_BASE: DeclarativeMeta = sqlalchemy.orm.declarative_base()
 
 #TODO: naming collision with all the networking/server stuff, find a better name
 class Request(ORM_BASE):
