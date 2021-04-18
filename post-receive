@@ -1,5 +1,5 @@
 #!/bin/sh
-#copy this file to .git/hooks to enable uwsgi emperor reload and venve regenration on push
+#copy this file to .git/hooks to enable uwsgi emperor reload and venv regeneration on push
 VENV_DIR="../.venv"
 PRODUCTION_BRANCH="latest"
 
@@ -37,8 +37,8 @@ do
             fi
         done
         ### Tell emperor to reload app configuration
-        # check if file exists. If it does not, touching could
-        # cause issues during next push
+        # Only touch if the file exists
+        # Touching otherwise will result in an unclean work tree which will refuse pushes
         if [ -e "../vassal.ini" ]
         then
             echo "Touching config to reload the app"

@@ -1,5 +1,6 @@
 """Database model."""
 import re
+import copy
 import json
 import time
 import uuid
@@ -142,7 +143,9 @@ class GameInfo(ORM_BASE):
         timestamp = int(time.time())
         unavailable = False
 
-        kwargs = locals()
+        # instead of tediously copying and pasting all variables into the class call
+        # dump the local namespace instead
+        kwargs = copy.copy(locals())
         del kwargs["cls"], kwargs["info_json"]
         new_obj = cls(**kwargs)
         return new_obj
