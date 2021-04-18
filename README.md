@@ -10,7 +10,7 @@ Requires python 3.6+, depends on:
 - Flask
 - Flask-OpenID
 - SQLAlchemy
-- pyexcel-ods3
+- ~pyexcel-ods3~ ods export currently not supported
 - pyexcel-xls
 - pyexcel-xlsx
 - requests
