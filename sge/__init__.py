@@ -112,7 +112,7 @@ def cleanup(signal: int) -> None:
 
 class GameInfoFetcher(threading.Thread):
     """Background thread for processing db.Queue."""
-    def __init__(self, db_session_proxy) -> None:
+    def __init__(self, db_session_proxy: sqlalchemy.orm.scoped_session) -> None:
         super().__init__(target=None, name="store_info_fetcher", daemon=False)
         self.condition = threading.Condition()
         self._terminate = threading.Event()
