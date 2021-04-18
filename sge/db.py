@@ -143,8 +143,8 @@ class GameInfo(ORM_BASE):
         timestamp = int(time.time())
         unavailable = False
 
-        # instead of tediously copying and pasting all variables into the class call
-        # dump the local namespace instead
+        # instead of tediously copying and pasting all variables into the contstructor call,
+        # dump the local namespace instead (after removing redundant variables first)
         kwargs = copy.copy(locals())
         del kwargs["cls"], kwargs["info_json"]
         new_obj = cls(**kwargs)

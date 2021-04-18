@@ -1,3 +1,12 @@
+"""
+Note about the fetcher thread: due to how pytest runs these tests, the
+fetcher threads will quit only after the main pytest thread will, which
+happens AFTER test environments have been cleaned up. This means that
+logging facilities, and their underlying I/O objects will be closed and
+will raise errors when the fetcher thread tries to signal its shutdown.
+This issue does not occur when running through uWSGI or flask dev
+server.
+"""
 import os
 import time
 import logging
@@ -141,21 +150,6 @@ def app_client_fixture():
         with app.test_client() as client:
             yield client, app
 
-        sqlalchemy.orm.close_all_sessions()
-    finally:
-        tmp.close()
-        os.unlink(tmp.name)
-
-
-@pytest.fixture
-def db_session_fixture(monkeypatch):
-    """Initialize db and prevent the app from doing so again"""
-    try:
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        tmp.close()
-        db_session = db.init(tmp.name)
-        monkeypatch.setattr(views.db, "init", lambda url: db_session)
-        yield db_session()
         sqlalchemy.orm.close_all_sessions()
     finally:
         tmp.close()
