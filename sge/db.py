@@ -3,6 +3,7 @@ import re
 import json
 import time
 import uuid
+import sqlite3
 import logging
 
 from typing import Any, List, Optional
@@ -12,6 +13,12 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.orm.decl_api import DeclarativeMeta
 
 LOGGER = logging.getLogger(__name__)
+
+# https://sqlite.org/limits.html
+SQLITE_MAX_VARIABLE_NUMBER = 999
+if sqlite3.sqlite_version_info[0] > 3 or \
+   (sqlite3.sqlite_version_info[0] == 3 and sqlite3.sqlite_version_info[1] >= 32):
+    SQLITE_MAX_VARIABLE_NUMBER = 32766
 
 RE_SIMPLE_HTML = re.compile(r"<.*?>")
 ORM_BASE: DeclarativeMeta = sqlalchemy.orm.declarative_base()
@@ -165,17 +172,20 @@ def init(path: str) -> sqlalchemy.orm.scoped_session:
 
 
 def in_query_chunked(db_session: sqlalchemy.orm.Session, query_target: ORM_BASE,
-                     filter_from: ORM_BASE, in_value: list, batch_size: int = 999) -> list:
+                     filter_from: ORM_BASE, in_value: list,
+                     batch_size: int = SQLITE_MAX_VARIABLE_NUMBER) -> list:
     """Perform sqlalchemy in_() operation on the query, but in chunks to
     avoid triggering the 'too many SQLite variables' error.
     """
     query_return: List[Any] = []
     loop_num = 0
     last_batch_size = batch_size
-    while last_batch_size == batch_size:
-        loop_num += 1
-        batch = in_value[batch_size*(loop_num-1):batch_size*loop_num]
-        query_return.extend(db_session.query(query_target).filter(filter_from.in_(batch)).all())
-        last_batch_size = len(batch)
+    while in_value:
+        batch = in_value[:batch_size]
+        query_return.extend(
+            db_session.execute(sqlalchemy.select(query_target).\
+            where(filter_from.in_(batch))).scalars().all()
+        )
+        in_value = in_value[batch_size:]
 
     return query_return

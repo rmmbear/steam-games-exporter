@@ -12,6 +12,7 @@ from typing import Any, IO, List, Union
 import flask
 import flask_openid
 import werkzeug
+import sqlalchemy
 
 import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
@@ -62,9 +63,8 @@ def load_job() -> None:
     if job_uuid:
         #FIXME: delay query until the resource is actually needed
         LOGGER.debug("Found job cookie %s", job_uuid)
-        job_db_row = db_session.query(db.Request).filter(
-            db.Request.job_uuid == job_uuid
-        ).first()
+        job_db_row = db_session.execute(sqlalchemy.select(db.Request).\
+            where(db.Request.job_uuid == job_uuid)).scalar()
         if job_db_row:
             LOGGER.debug("Found job in db")
             flask.g.job_db_row = job_db_row
@@ -226,8 +226,6 @@ def check_for_missing_ids(requested_ids: List[int]) -> set:
     db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
     available_ids = db.in_query_chunked(
         db_session, db.GameInfo.appid, db.GameInfo.appid, requested_ids)
-    # returned = [(<appid>,), (<appid>), ...], we need to flatten that list
-    available_ids = [row[0] for row in available_ids]
     missing_ids = set(requested_ids).difference(available_ids)
     LOGGER.debug("Found %s missing ids in new request", len(missing_ids))
 
@@ -264,7 +262,6 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
         queued_ids = db.in_query_chunked(
             db_session, db.Queue.appid, db.Queue.appid, list(missing_ids)
         )
-        queued_ids = [row[0] for row in queued_ids]
         missing_ids = missing_ids.difference(queued_ids)
         LOGGER.debug("%s missing ids after comparing with queue", len(missing_ids))
         for appid in missing_ids:

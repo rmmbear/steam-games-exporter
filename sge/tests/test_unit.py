@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import pytest
 import requests
+import sqlalchemy as sqla
 import sqlalchemy.orm
 
 import sge
@@ -255,24 +256,31 @@ def test_extended_export(api_session_fixture, app_client_fixture):
     assert "job" in [cookie.name for cookie in client.cookie_jar]
     job_cookie = [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]
     assert "session" not in [cookie.name for cookie in client.cookie_jar]
-    assert db_session.query(db.Queue).count() == DummyAPISession.GENERATE_GAMES_NUM
-    assert db_session.query(db.Request).count() == 1
-    assert db_session.query(db.Request).first().job_uuid == job_cookie.value
+    assert db_session.execute(
+        sqla.select(sqla.func.count()).\
+        select_from(db.Queue)).scalar() == DummyAPISession.GENERATE_GAMES_NUM
+    assert db_session.execute(
+        sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 1
+    assert db_session.execute(
+        sqla.select(db.Request.job_uuid)).scalars().first() == job_cookie.value
     assert resp.status_code == 202
 
     generate_fake_game_info(DummyAPISession.GENERATE_GAMES_NUM, db_session)
-    assert db_session.query(db.GameInfo).count() == DummyAPISession.GENERATE_GAMES_NUM
-    db_session.query(db.Queue).delete() #clear the queue manually
+    assert db_session.execute(
+        sqla.select(sqla.func.count()).\
+        select_from(db.GameInfo)).scalar() == DummyAPISession.GENERATE_GAMES_NUM
+
+    db_session.execute(sqla.delete(db.Queue)) #clear the queue manually
     db_session.commit()
-    assert db_session.query(db.Queue).count() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar() == 0
 
     ### GET: job cookie present from last request, game info available for export
     resp = client.get("/tools/steam-games-exporter/export")
     assert not resp.headers.get("Location")
     assert not client.cookie_jar
     assert "attachment" in resp.headers.get("Content-Disposition")
-    assert db_session.query(db.Queue).count() == 0
-    assert db_session.query(db.Request).count() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0
     assert resp.status_code == 200
 
     ### POST: game info already available, do not queue anything, export in one step
@@ -283,8 +291,8 @@ def test_extended_export(api_session_fixture, app_client_fixture):
     assert not resp.headers.get("Location")
     assert not client.cookie_jar
     assert "attachment" in resp.headers.get("Content-Disposition")
-    assert db_session.query(db.Queue).count() == 0
-    assert db_session.query(db.Request).count() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0
     assert resp.status_code == 200
 
 
@@ -323,14 +331,15 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
     assert gameinfo_fetcher.is_alive()
-    assert db_session.query(db.Request).count() == 3
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 3
     # wait until the thread terminates
     gameinfo_fetcher._terminate.set()
     gameinfo_fetcher.notify()
     gameinfo_fetcher.join()
 
-    queue_length = db_session.query(db.Queue).count()
-    gameinfo_length = db_session.query(db.GameInfo).count()
+    queue_length = db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar()
+    gameinfo_length = db_session.execute(
+        sqla.select(sqla.func.count()).select_from(db.GameInfo)).scalar()
     # how much will be added to gameinfo depends on how much these tests take
     # but they should take long enough to have at least a couple in there
     # on the other hand, because we're adding ids as fetcher is processing the queue,
@@ -349,9 +358,9 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     app.config["SGE_FETCHER_THREAD"]._terminate.set()
 
     ### cleaner runs without issues in empty db
-    assert db_session.query(db.GameInfo).count() == 0
-    assert db_session.query(db.Queue).count() == 0
-    assert db_session.query(db.Request).count() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.GameInfo)).scalar() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0
     with app.app_context():
         sge.cleanup(-1)
 
@@ -371,26 +380,26 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
         client.cookie_jar.clear()
 
     client.cookie_jar.clear()
-    assert db_session.query(db.Request).count() == 4
-    assert db_session.query(db.Request).filter(
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 4
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request).where(
         db.Request.timestamp <= time.time() - sge.COOKIE_MAX_AGE + 60 * 60
         # being extra careful for no reason:
         # ensue none of the cookies are going to expire in the next hour
-    ).count() == 0
+    )).scalar() == 0
 
     # set timestamp of three request to a moment in the past
-    db_session.query(db.Request).filter(
-        db.Request.job_uuid.in_([uuid for uuid in requests[:3]])
-        ).update(
-            {db.Request.timestamp: int(time.time()) - sge.COOKIE_MAX_AGE},
-            synchronize_session=False
-        )
+    db_session.execute(
+        sqla.update(db.Request).\
+        where(db.Request.job_uuid.in_([uuid for uuid in requests[:3]])).\
+        values(timestamp=int(time.time()) - sge.COOKIE_MAX_AGE).\
+        execution_options(synchronize_session=False)
+    )
     db_session.commit()
 
     with app.app_context():
         sge.cleanup(-1)
-    assert db_session.query(db.Request).count() == 1
-    assert db_session.query(db.Request).first().job_uuid == requests[3]
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 1
+    assert db_session.execute(sqla.select(db.Request.job_uuid)).scalars().first() == requests[3]
     # clients whose requests got deleted can make further requests without issues (redirect to /)
     for uuid in requests[:3]:
         client.cookie_jar.clear()
@@ -412,12 +421,13 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     assert resp.status_code == 202
 
     # expire the remaining request
-    db_session.query(db.Request).update(
-        {db.Request.timestamp: int(time.time()) - sge.COOKIE_MAX_AGE},
-        synchronize_session=False
+    db_session.execute(
+        sqla.update(db.Request).\
+        values(timestamp=int(time.time()) - sge.COOKIE_MAX_AGE).\
+        execution_options(synchronize_session=False)
     )
     db_session.commit()
 
     with app.app_context():
         sge.cleanup(-1)
-    assert db_session.query(db.Request).count() == 0
+    assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0

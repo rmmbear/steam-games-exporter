@@ -107,7 +107,7 @@ def cleanup(signal: int) -> None:
     LOGGER.info("Cleaning old requests")
     cutoff = int(time.time()) - COOKIE_MAX_AGE
     db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
-    db_session.query(db.Request).filter(db.Request.timestamp <= cutoff).delete()
+    db_session.execute(sqlalchemy.delete(db.Request).where(db.Request.timestamp <= cutoff))
     db_session.commit()
 
     LOGGER.info("Vacuuming sqlite db")
@@ -172,7 +172,7 @@ class GameInfoFetcher(threading.Thread):
         LOGGER.info("Fetcher thread started")
         db_session = self.scoped_session()
         # 20 items = 30 seconds (at minimum) at 1.5s delay between requests
-        queue_query = sqlalchemy.orm.Query([db.Queue]).order_by(db.Queue.timestamp).limit(20)
+        queue_query = sqlalchemy.select(db.Queue).order_by(db.Queue.timestamp.asc()).limit(20)
         LOGGER.info("Starting shutdown notifier")
         self.shutdown_notifier.start()
         with APISession() as api_session:
@@ -182,7 +182,7 @@ class GameInfoFetcher(threading.Thread):
                     LOGGER.info("Terminating fetcher thread (idle)")
                     return
 
-                queue_batch = queue_query.with_session(db_session).all()
+                queue_batch = db_session.execute(queue_query).scalars().all()
                 if not queue_batch:
                     LOGGER.info("Nothing in the queue for fetcher, waiting")
                     self.scoped_session.remove()
@@ -197,10 +197,7 @@ class GameInfoFetcher(threading.Thread):
                         LOGGER.info("Terminating fetcher thread (processing)")
                         return
 
-                    app_already_known = db_session.query(db.GameInfo).filter(
-                        db.GameInfo.appid == int(queue_item.appid)
-                    ).exists()
-                    if not db_session.query(app_already_known).scalar():
+                    if not db_session.get(db.GameInfo, int(queue_item.appid)):
                         try:
                             game_info = api_session.query_store(queue_item.appid)
                             db_session.add(game_info)
