@@ -230,9 +230,9 @@ def test_extended_export(api_session_fixture, app_client_fixture):
     client, app = app_client_fixture
     db_session = app.config["SGE_SCOPED_SESSION"]()
 
-    # disable fetcher thread by overriding its start method
+    # disable fetcher thread
     # we're manually adding all the entries and don't want fetcher to interfere
-    app.config["SGE_FETCHER_THREAD"].start = lambda: None
+    app.config["SGE_FETCHER_THREAD"]._terminate.set()
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
@@ -318,21 +318,12 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     with client.session_transaction() as app_session:
         app_session["steamid"] = 1
     resp = client.post("/tools/steam-games-exporter/export?export",
-                       data={"format": "ods", "include-gameinfo": True})
-    assert resp.status_code == 202
-    resp = client.get("/tools/steam-games-exporter/export")
-    assert resp.status_code == 202
-
-    client.cookie_jar.clear()
-    with client.session_transaction() as app_session:
-        app_session["steamid"] = 1
-    resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "csv", "include-gameinfo": True})
     assert resp.status_code == 202
     resp = client.get("/tools/steam-games-exporter/export")
     assert resp.status_code == 202
     assert gameinfo_fetcher.is_alive()
-    assert db_session.query(db.Request).count() == 4
+    assert db_session.query(db.Request).count() == 3
     # wait until the thread terminates
     gameinfo_fetcher._terminate.set()
     gameinfo_fetcher.notify()

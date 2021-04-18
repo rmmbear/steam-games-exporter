@@ -15,7 +15,6 @@ import werkzeug
 
 import pyexcel_xls as pyxls
 import pyexcel_xlsx as pyxlsx
-import pyexcel_ods3 as pyods
 
 import sge
 from sge import db
@@ -180,7 +179,7 @@ def games_export_config() -> werkzeug.wrappers.Response:
         return flask.redirect(flask.url_for("sge.index"))
 
     if flask.request.method == "POST":
-        if flask.request.form["format"] not in ["ods", "xls", "xlsx", "csv"]:
+        if flask.request.form["format"] not in ["xls", "xlsx", "csv"]:
             flask.abort(400)
 
         steamid = flask.session["steamid"]
@@ -384,8 +383,7 @@ def send_exported_file(export_data: List[List[Any]], export_format: str
             #   value_type = service.ODS_WRITE_FORMAT_COVERSION[type(cell)]
             # KeyError: <class 'NoneType'>
             # so much for the "don't worry about the format" part, eh?
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            pyods.save_data(tmp, {"GAMES":export_data})
+            raise NotImplementedError()
         elif export_format == "xls":
             tmp = tempfile.NamedTemporaryFile(delete=False)
             pyxls.save_data(tmp, {"GAMES":export_data})
