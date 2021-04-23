@@ -82,7 +82,6 @@ def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
     app.config["SGE_DB_PATH"] = db_path
     app.config["SGE_SCOPED_SESSION"] = db.init(db_path)
     app.config["SGE_FETCHER_THREAD"] = GameInfoFetcher(app.config["SGE_SCOPED_SESSION"])
-    app.config["SGE_FETCHER_THREAD"].start()
     app.config["SGE_STEAM_DEV_KEY"] = steam_key
 
     app.register_blueprint(views.APP_BP)

@@ -52,6 +52,19 @@ OID = flask_openid.OpenID()
 APP_BP = flask.Blueprint("sge", __name__, url_prefix="/tools/steam-games-exporter")
 
 
+@APP_BP.before_app_first_request
+def start_fetcher() -> None:
+    """Start the fetcher thread.
+    Due to how uWSGI emperor spawns workers, the fetcher tread has to
+    be started in a worker thread, and not in the thread executing
+    run.py (main thread in that context, and in context of a worker, are
+    actually different threads, thus fetcher waits for exit of the
+    wrong main thread when started there).
+    """
+    LOGGER.info("Received first request, starting fetcher thread")
+    flask.current_app.config["SGE_FETCHER_THREAD"].start()
+
+
 @APP_BP.before_request
 def load_job() -> None:
     """Check for job cookies, load corresponding job from db.
