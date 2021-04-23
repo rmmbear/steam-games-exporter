@@ -98,7 +98,7 @@ def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
     return app
 
 
-def cleanup(signal: int) -> None:
+def cleanup(signal: int, app: flask.Flask) -> None:
     """Remove old requests and vacuum the database.
     This command is intended to be called by uwsgi cron every day
     (see run.py).
@@ -106,13 +106,13 @@ def cleanup(signal: int) -> None:
     LOGGER.debug("Received uwsgi signal %s", signal)
     LOGGER.info("Cleaning old requests")
     cutoff = int(time.time()) - COOKIE_MAX_AGE
-    db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
+    db_session = app.config["SGE_SCOPED_SESSION"]()
     db_session.execute(sqlalchemy.delete(db.Request).where(db.Request.timestamp <= cutoff))
     db_session.commit()
 
     LOGGER.info("Vacuuming sqlite db")
     db_session.execute(sqlalchemy.text("VACUUM"))
-    db_session = flask.current_app.config["SGE_SCOPED_SESSION"].remove()
+    db_session = app.config["SGE_SCOPED_SESSION"].remove()
 
 
 class GameInfoFetcher(threading.Thread):

@@ -158,7 +158,7 @@ def app_client_fixture():
 
 def test_routing(app_client_fixture, monkeypatch):
     """"""
-    client, app = app_client_fixture
+    client, _ = app_client_fixture
 
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
@@ -242,7 +242,7 @@ def test_extended_export(api_session_fixture, app_client_fixture):
         app_session["steamid"] = 1234567890
     resp = client.post("/tools/steam-games-exporter/export?export",
                        data={"format": "csv", "include-gameinfo": True})
-    assert not resp.headers.get("Location")
+    assert not resp.headers.get("Location") #user is not redirected
     resp_msg = views.MSG_QUEUE_CREATED.format(
         missing_ids=DummyAPISession.GENERATE_GAMES_NUM,
         delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1)
@@ -326,6 +326,7 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     assert resp.status_code == 202
     assert gameinfo_fetcher.is_alive()
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 3
+
     # wait until the thread terminates
     gameinfo_fetcher._terminate.set()
     gameinfo_fetcher.notify()
@@ -338,7 +339,6 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     # but they should take long enough to have at least a couple in there
     # on the other hand, because we're adding ids as fetcher is processing the queue,
     # we're going to wind up with duplicate ids, (no more than 20, size of fetcher's batch)
-
     assert queue_length + gameinfo_length >= DummyAPISession.GENERATE_GAMES_NUM
     assert queue_length + gameinfo_length <= DummyAPISession.GENERATE_GAMES_NUM + 20
 
@@ -355,11 +355,9 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.GameInfo)).scalar() == 0
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar() == 0
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0
-    with app.app_context():
-        sge.cleanup(-1)
+    sge.cleanup(-1, app)
 
     monkeypatch.setattr(DummyAPISession, "GENERATE_GAMES_NUM", 1)
-
     # POST 4 times, each time with different steamid to create 4 requests
     requests = []
     for i in range(1, 5):
@@ -390,8 +388,7 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     )
     db_session.commit()
 
-    with app.app_context():
-        sge.cleanup(-1)
+    sge.cleanup(-1, app)
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 1
     assert db_session.execute(sqla.select(db.Request.job_uuid)).scalars().first() == requests[3]
     # clients whose requests got deleted can make further requests without issues (redirect to /)
@@ -422,6 +419,5 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     )
     db_session.commit()
 
-    with app.app_context():
-        sge.cleanup(-1)
+    sge.cleanup(-1, app)
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0

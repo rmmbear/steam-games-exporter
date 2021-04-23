@@ -28,7 +28,8 @@ APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV], steam_key=STEAM_KEY, db_path=
 if "uwsgi" in locals():
     # uwsgi docs do not mention what the strategy for chosing signal numbers should be
     # their examples used seemingly random integers in the usable range (1-90)
-    uwsgi.register_signal(10, "", sge.cleanup)
+    daily_maintenance = lambda signal: sge.cleanup(signal, APP)
+    uwsgi.register_signal(10, "", daily_maintenance)
     # cron job triggering signal 10 at 1am (server's local time)
     uwsgi.add_cron(10, 0, 1, -1, -1, -1)
 
