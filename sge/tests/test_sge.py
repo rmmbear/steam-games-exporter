@@ -8,6 +8,7 @@ This issue does not occur when running through uWSGI or flask dev
 server.
 """
 import os
+import json
 import time
 import logging
 import tempfile
@@ -50,7 +51,7 @@ JSON_TEMPLATE_GAMEINFO = """{
             "controller_support": "full",
             "supported_languages": "English<strong>*</strong>, French, Spanish - Spain, Korean<br><strong>*</strong>languages with full audio support",
             "developers": ["developer 1", "developer2"],
-            "publishers": ["publisher 1"],
+            "publishers": ["publisher 1", "publisher 2"],
             "platforms": {"windows": true, "mac": true, "linux": true},
             "categories": [{"id": 2,"description": "Single-player"},
                            {"id": 22, "description": "Steam Achievements"},
@@ -60,7 +61,7 @@ JSON_TEMPLATE_GAMEINFO = """{
                            {"id": 43, "description": "Remote Play on TV"}],
             "genres": [{"id": "23", "description": "Indie"},
                        {"id": "3", "description": "RPG"}],
-            "release_date": {"coming_soon": false, "date": "00 Month, Year"},
+            "release_date": {"coming_soon": false, "date": "2 Oct, 2020"},
             "content_descriptors": {"ids": [], "notes": null}
         }
     }
@@ -137,7 +138,7 @@ def generate_fake_game_info(maxid: int, db_session):
 def api_session_fixture(monkeypatch):
     """Prevent app from making any requests"""
     monkeypatch.setattr(sge, "APISession", DummyAPISession)
-    yield
+    yield DummyAPISession
 
 
 @pytest.fixture
@@ -149,16 +150,29 @@ def app_client_fixture():
         app = sge.create_app(sge.ConfigDevelopment, steam_key="", db_path=tmp.name)
         with app.test_client() as client:
             yield client, app
-
-        sqlalchemy.orm.close_all_sessions()
     finally:
+        sqlalchemy.orm.close_all_sessions()
+        tmp.close()
+        os.unlink(tmp.name)
+
+
+@pytest.fixture
+def db_session_fixture():
+    """Create new scoped session independent from the app"""
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        scoped_session = db.init(tmp.name)
+        yield scoped_session
+    finally:
+        sqlalchemy.orm.close_all_sessions()
         tmp.close()
         os.unlink(tmp.name)
 
 
 def test_routing(app_client_fixture, monkeypatch):
     """"""
-    client, _ = app_client_fixture
+    client, app = app_client_fixture
 
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
@@ -220,6 +234,13 @@ def test_routing(app_client_fixture, monkeypatch):
     assert client.cookie_jar
     assert not resp.headers.get("Location")
 
+    # termminate fetcher manually to prevent writing to closed I/O objects in pytext context
+    # see this module's docstring for details
+    fetcher = app.config["SGE_FETCHER_THREAD"]
+    fetcher._terminate.set()
+    fetcher.notify()
+    fetcher.join()
+
 
 def test_extended_export(api_session_fixture, app_client_fixture):
     client, app = app_client_fixture
@@ -227,7 +248,8 @@ def test_extended_export(api_session_fixture, app_client_fixture):
 
     # disable fetcher thread
     # we're manually adding all the entries and don't want fetcher to interfere
-    app.config["SGE_FETCHER_THREAD"]._terminate.set()
+    gameinfo_fetcher = app.config["SGE_FETCHER_THREAD"]
+    gameinfo_fetcher._terminate.set()
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
