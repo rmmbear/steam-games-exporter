@@ -170,6 +170,45 @@ def db_session_fixture():
         os.unlink(tmp.name)
 
 
+def test_gameinfo_init():
+    """"""
+    appid = 1
+    parsed_json = json.loads(JSON_TEMPLATE_GAMEINFO % (appid, f"App {appid}", appid))
+    parsed_json = parsed_json[str(appid)]["data"]
+    start_time = time.time()
+    gameinfo_obj = db.GameInfo.from_json(appid, parsed_json)
+
+    ### All values are derived as expected
+    # values derived manually from JSON_TEMPLATE_GAMEINFO
+    derived_values = {
+        "appid": appid,
+        "name": f"App {appid}",
+        "type": "game",
+        "developers": "developer 1,\ndeveloper2",
+        "publishers": "publisher 1,\npublisher 2",
+        "is_free": False,
+        "on_linux": True,
+        "on_mac": True,
+        "on_windows": True,
+        "supported_languages": \
+            "English*, French, Spanish - Spain, Korean\n*languages with full audio support",
+        "controller_support": "full",
+        "age_gate": 0,
+        "categories": "Single-player,\nSteam Achievements,\nFull controller support,\nSteam Trading Cards,\nSteam Cloud,\nRemote Play on TV",
+        "genres": "Indie,\nRPG",
+        "release_date": "2020/10/02",
+        "unavailable": False,
+    }
+
+    for column in db.GameInfo.__table__.columns:
+        if column.key == "timestamp":
+            assert gameinfo_obj.timestamp >= int(start_time)
+            continue
+
+        assert column.key in derived_values, f"'{column.key}' not found in derived values"
+        assert getattr(gameinfo_obj, column.key) == derived_values[column.key]
+
+
 def test_routing(app_client_fixture, monkeypatch):
     """"""
     client, app = app_client_fixture
