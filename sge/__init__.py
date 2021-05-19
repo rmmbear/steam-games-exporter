@@ -128,7 +128,7 @@ class GameInfoFetcher(threading.Thread):
             # wait until main thread stops execution
             threading.main_thread().join()
             # trigger termination event and wake fetcher thread
-            LOGGER.info("Requesting fetcher thread termination")
+            #LOGGER.info("Requesting fetcher thread termination")
             fetcher_thread._terminate.set()
             fetcher_thread.notify(force=True)
 
@@ -196,33 +196,37 @@ class GameInfoFetcher(threading.Thread):
                         LOGGER.info("Terminating fetcher thread (processing)")
                         return
 
-                    if not db_session.get(db.GameInfo, int(queue_item.appid)):
-                        try:
-                            game_info = api_session.query_store(queue_item.appid)
-                            db_session.add(game_info)
-                            db_session.delete(queue_item)
-                            db_session.commit()
-                        except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as exc:
-                            LOGGER.warning("Network error: %s", exc)
-                            if exc.response and exc.response.status_code == 429:
-                                # wait longer if we're rate limited,
-                                # store api does not tell us how long we have to wait
-                                self._wait(timeout=60, rate_limited=True)
-                            else:
-                                self._wait(10, rate_limited=True)
-
-                            continue
-                        except Exception as exc:
-                            LOGGER.exception("Ignoring unexpected exception:")
-                            db_session.rollback()
-                            # move item to the bottom of the stack
-                            queue_item.timestamp = int(time.time())
-                            db_session.commit()
-                            self._wait(10, rate_limited=True)
-                            break
-                    else:
+                    if db_session.get(db.GameInfo, int(queue_item.appid)):
                         LOGGER.warning("encountered queue item for an already known app (%s)",
                                        queue_item.appid)
+                        db_session.delete(queue_item)
+                        db_session.commit()
+                        continue
+
+                    try:
+                        game_info = api_session.query_store(queue_item.appid)
+                        db_session.add(game_info)
+                        db_session.delete(queue_item)
+                        db_session.commit()
+                    except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as exc:
+                        LOGGER.warning("Network error: %s", exc)
+                        if exc.response and exc.response.status_code == 429:
+                            # wait longer if we're rate limited,
+                            # store api does not tell us how long we have to wait
+                            self._wait(timeout=60, rate_limited=True)
+                        else:
+                            self._wait(10, rate_limited=True)
+
+                        continue
+                    except Exception as exc:
+                        LOGGER.exception("Ignoring unexpected exception:")
+                        db_session.rollback()
+                        # move item to the bottom of the stack
+                        queue_item.timestamp = int(time.time())
+                        db_session.commit()
+                        self._wait(10, rate_limited=True)
+                        break
+
 
 
 class APISession():
@@ -250,7 +254,7 @@ class APISession():
         return self
 
 
-    #type literals available in python 3.8+, we're targeting 3.6+
+    #type literals from typing available in python 3.8+, we're targeting 3.6+
     def __exit__(self, *args: Any, **kwargs: Any) -> False:
         self.requests_session.close()
         return False
