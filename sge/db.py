@@ -53,6 +53,7 @@ class Request(ORM_BASE):
         )
 
 
+
 class Queue(ORM_BASE):
     """Table serving as a queue for the game info fetcher."""
     __tablename__ = "games_queue"
@@ -67,6 +68,7 @@ class Queue(ORM_BASE):
         return "<Queue(app {} for request {})>".format(
             self.appid, self.job_uuid
         )
+
 
 
 class GameInfo(ORM_BASE):
@@ -140,6 +142,17 @@ class GameInfo(ORM_BASE):
         else:
             genres = None
         release_date = info_json["release_date"]["date"]
+        try:
+            if release_date:
+                release_date = time.strftime("%Y/%m/%d", time.strptime(release_date, "%d %b, %Y"))
+        except ValueError:
+            LOGGER.error(
+                "release date does not match known date format: %s (expected '% d % b, % Y')",
+                release_date
+            )
+            # allow inconsistent dates
+            # having to manually correct these later is preferrable to sge crashing and burning
+
         timestamp = int(time.time())
         unavailable = False
 
@@ -149,6 +162,7 @@ class GameInfo(ORM_BASE):
         del kwargs["cls"], kwargs["info_json"]
         new_obj = cls(**kwargs)
         return new_obj
+
 
 
 def init(path: str) -> sqlalchemy.orm.scoped_session:
