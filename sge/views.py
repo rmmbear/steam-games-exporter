@@ -32,10 +32,10 @@ MSG_NO_COOKIES = "If your browser is rejecting cookies (which are necessary for 
                  "settings for this session."
 MSG_PROCESSING_QUEUE = "Your request is still being processed. " \
                        "Still fetching game info for {missing_ids} games. " \
-                       "This page will refresh automatically every 10 seconds."
+                       "This page will refresh automatically every {refresh} seconds."
 MSG_QUEUE_CREATED = "{missing_ids} items added to the queue. " \
-                    "Fetching them take at minimum {delay} minutes. " \
-                    "This page will automatically refresh every 10 seconds."
+                    "Fetching them will take at minimum {delay} minutes. " \
+                    "This page will automatically refresh every {refresh} seconds."
 MSG_RATE_LIMITED = "The server is currently rate limited and your request will take longer " \
                    "to complete."
 
@@ -152,15 +152,14 @@ def login_router() -> werkzeug.wrappers.Response:
     if flask.request.method == 'POST' and cookies:
         return login()
 
-    # this should only be displayed in case of errors
-    # lack of cookies is an error
     messages = []
     if not cookies:
         messages.append(("Missing cookies", MSG_NO_COOKIES))
     oid_error = OID.fetch_error()
     if oid_error:
         messages.append(("OpenID Error", oid_error))
-
+    # this should only be displayed in case of errors
+    # lack of cookies is an error
     return flask.make_response(flask.render_template("error.html", messages=messages), 404)
 
 
@@ -231,7 +230,6 @@ def games_export_config() -> werkzeug.wrappers.Response:
 # xls and csv should not be retained because of their short export times
 # csv doubly so because of its big file sizes
 
-
 def check_for_missing_ids(requested_ids: List[int]) -> set:
     """Check if the request being handled has any appids still in the
     Queue. Returns list of integers (appids).
@@ -283,13 +281,13 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
         messages = [
             ("Processing",
              MSG_QUEUE_CREATED.format(
-                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1)
+                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1, refresh=5)
             )
         ]
         if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", refresh=10, messages=messages), 202)
+            flask.render_template("error.html", refresh=5, messages=messages), 202)
         resp.set_cookie(
             "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
             path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
@@ -314,11 +312,15 @@ def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response
     #FIXME: communicate properly that there might be other profiles in the queue
     if missing_ids:
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
-        messages = [("Processing", MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids))]
+        messages = [
+            ("Processing",
+             MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids, refresh=5)
+            )
+        ]
         if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", refresh=10, messages=messages), 202)
+            flask.render_template("error.html", refresh=5, messages=messages), 202)
         return resp
 
     if "job_db_row" in flask.g:
