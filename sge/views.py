@@ -266,6 +266,7 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
     requested_ids = [row["appid"] for row in games_json]
     missing_ids = check_for_missing_ids(requested_ids)
     db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
+    page_refresh_delay = flask.current_app.config["SGE_PAGE_REFRESH"]
     if missing_ids:
         new_request = db.Request(games_json, file_format)
         queue = [new_request]
@@ -279,15 +280,16 @@ def prepare_extended_export(steamid: int, file_format: str) -> werkzeug.wrappers
             queue.append(db.Queue(appid=appid, job_uuid=new_request.job_uuid,
                                   timestamp=int(time.time())))
         messages = [
-            ("Processing",
-             MSG_QUEUE_CREATED.format(
-                 missing_ids=len(missing_ids), delay=(len(missing_ids) * 1.5) // 60 + 1, refresh=5)
+            ("Processing", MSG_QUEUE_CREATED.format(
+                     missing_ids=len(missing_ids),
+                     delay=(len(missing_ids) * 1.5) // 60 + 1,
+                     refresh=page_refresh_delay)
             )
         ]
         if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", refresh=5, messages=messages), 202)
+            flask.render_template("error.html", messages=messages, refresh=page_refresh_delay), 202)
         resp.set_cookie(
             "job", value=new_request.job_uuid, max_age=sge.COOKIE_MAX_AGE,
             path="/tools/steam-games-exporter/", secure=False, httponly=True, samesite="Lax"
@@ -305,6 +307,7 @@ def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response
     """Check if we can proceed with export for previously recorded job.
     """
     db_session = flask.current_app.config["SGE_SCOPED_SESSION"]()
+    page_refresh_delay = flask.current_app.config["SGE_PAGE_REFRESH"]
     profile_info = json.loads(request_job.games_json)
     requested_ids = [row["appid"] for row in profile_info]
     missing_ids = len(check_for_missing_ids(requested_ids))
@@ -314,13 +317,13 @@ def check_extended_export(request_job: db.Request) -> werkzeug.wrappers.Response
         LOGGER.debug("There are %s missing ids for request %s", missing_ids, request_job.job_uuid)
         messages = [
             ("Processing",
-             MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids, refresh=5)
+             MSG_PROCESSING_QUEUE.format(missing_ids=missing_ids, refresh=page_refresh_delay)
             )
         ]
         if flask.current_app.config["SGE_FETCHER_THREAD"].rate_limited:
             messages.append(("Error", MSG_RATE_LIMITED))
         resp = flask.make_response(
-            flask.render_template("error.html", refresh=5, messages=messages), 202)
+            flask.render_template("error.html", refresh=page_refresh_delay, messages=messages), 202)
         return resp
 
     if "job_db_row" in flask.g:

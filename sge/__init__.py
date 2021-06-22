@@ -65,7 +65,8 @@ ENV_TO_CONFIG = {
 COOKIE_MAX_AGE = 172800 # 2 days, chosen arbitrarily
 
 
-def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
+def create_app(app_config: object, steam_key: str, db_path: str,
+               page_refresh: int = 5) -> flask.Flask:
     """Create flask app, configure it, and register blueprint from
     sge/views.py
     """
@@ -83,6 +84,7 @@ def create_app(app_config: object, steam_key: str, db_path: str) -> flask.Flask:
     app.config["SGE_SCOPED_SESSION"] = db.init(db_path)
     app.config["SGE_FETCHER_THREAD"] = GameInfoFetcher(app.config["SGE_SCOPED_SESSION"])
     app.config["SGE_STEAM_DEV_KEY"] = steam_key
+    app.config["SGE_PAGE_REFRESH"] = page_refresh
 
     app.register_blueprint(views.APP_BP)
     views.OID.init_app(app)

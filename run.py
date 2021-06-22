@@ -19,12 +19,25 @@ import sge
 # env vars are set automatically by emperor (see vassal.ini), have to be set manually in dev env
 # key.ini mentioned in vassal.ini is a one liner which sets the dev key as env var
 # not included in the repo for obvious reasons
-STEAM_KEY = os.environ.get("STEAM_DEV_KEY")
-FLASK_ENV = os.environ.get("FLASK_ENV", default="production")
-DB_PATH = os.environ.get("FLASK_DB_PATH", default="")
+STEAM_KEY = os.environ.get("SGE_STEAM_DEV_KEY")
+PAGE_REFRESH = os.environ.get("SGE_PAGE_REFRESH")
+DB_PATH = os.environ.get("SGE_DB_PATH", default="")
+ENVIRONMENT = os.environ.get("SGE_ENV", default="production")
 # if path is not set use in-memory sqlite db ("sqlite:///")
 
-APP = sge.create_app(sge.ENV_TO_CONFIG[FLASK_ENV], steam_key=STEAM_KEY, db_path=DB_PATH)
+if not STEAM_KEY:
+    raise RuntimeError("Steam API key not found!")
+PAGE_REFRESH_DELAY = 5
+if PAGE_REFRESH:
+    PAGE_REFRESH_DELAY = int(PAGE_REFRESH)
+
+APP = sge.create_app(
+    sge.ENV_TO_CONFIG[ENVIRONMENT],
+    steam_key=STEAM_KEY,
+    db_path=DB_PATH,
+    page_refresh=PAGE_REFRESH_DELAY
+)
+
 if "uwsgi" in locals():
     # uwsgi docs do not mention what the strategy for chosing signal numbers should be
     # their examples used seemingly random integers in the usable range (1-90)
