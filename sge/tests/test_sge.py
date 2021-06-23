@@ -284,7 +284,7 @@ def test_routing(app_client_fixture, monkeypatch):
 def test_extended_export(api_session_fixture, app_client_fixture):
     client, app = app_client_fixture
     db_session = app.config["SGE_SCOPED_SESSION"]()
-
+    page_refresh = app.config["SGE_PAGE_REFRESH"]
     # disable fetcher thread
     # we're manually adding all the entries and don't want fetcher to interfere
     gameinfo_fetcher = app.config["SGE_FETCHER_THREAD"]
@@ -306,7 +306,8 @@ def test_extended_export(api_session_fixture, app_client_fixture):
     assert not resp.headers.get("Location") #user is not redirected
     resp_msg = views.MSG_QUEUE_CREATED.format(
         missing_ids=DummyAPISession.GENERATE_GAMES_NUM,
-        delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1)
+        delay=DummyAPISession.GENERATE_GAMES_NUM*1.5 // 60 + 1,
+        refresh=page_refresh)
     assert resp_msg in resp.get_data().decode()
     assert "job" in [cookie.name for cookie in client.cookie_jar]
     job_cookie = [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]
