@@ -61,8 +61,8 @@ class Queue(ORM_BASE):
     job_uuid = sqlalchemy.Column(sqlalchemy.String)
     app_name = sqlalchemy.Column(sqlalchemy.String)
     timestamp = sqlalchemy.Column(sqlalchemy.Integer)
-    scrape = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
-    #^ scrape the info from store instead of using the api
+    regenerate = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
+    #^ if true and gameinfo for this appid exists, regenerate it
 
     def __repr__(self) -> str:
         return "<Queue(app {} for request {})>".format(
@@ -100,6 +100,7 @@ class GameInfo(ORM_BASE):
         return "<GameInfo(appid='{}', name='{}', ... timestamp='{}', unavailable='{}')>".format(
             self.appid, self.name, self.timestamp, self.unavailable
         )
+
 
     @classmethod
     def from_json(cls, appid: int, info_json: dict) -> "GameInfo":
@@ -147,7 +148,7 @@ class GameInfo(ORM_BASE):
                 release_date = time.strftime("%Y/%m/%d", time.strptime(release_date, "%d %b, %Y"))
         except ValueError:
             LOGGER.error(
-                "release date does not match known date format: %s (expected '% d % b, % Y')",
+                "release date does not match known date format: %s (expected '%%d %%b, %%Y')",
                 release_date
             )
             # allow inconsistent dates
