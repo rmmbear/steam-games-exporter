@@ -61,7 +61,7 @@ class Queue(ORM_BASE):
     job_uuid = sqlalchemy.Column(sqlalchemy.String)
     app_name = sqlalchemy.Column(sqlalchemy.String)
     timestamp = sqlalchemy.Column(sqlalchemy.Integer)
-    regenerate = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
+    #regenerate = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
     #^ if true and gameinfo for this appid exists, regenerate it
 
     def __repr__(self) -> str:
