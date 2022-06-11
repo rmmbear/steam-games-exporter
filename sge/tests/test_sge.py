@@ -67,6 +67,12 @@ JSON_TEMPLATE_GAMEINFO = """{
     }
 }"""
 
+def test_requires_env(*expected_vars):
+    return pytest.mark.skipif(
+        not all(x in os.environ for x in expected_vars),
+        reason=f"Following env vars need to be defined for this test: {expected_vars}"
+    )
+
 
 class DummyAPISession(sge.APISession):
     GENERATE_GAMES_NUM = 2000
@@ -86,14 +92,14 @@ class DummyAPISession(sge.APISession):
             LOGGER.debug("Querying profile with steamid=%s", steamid)
             content = self.fetch_dummy_steam_profile(steamid).encode()
         else:
-            raise ValueError("UNKNOWN ENDPOINT: %s", prepared_query.url)
+            raise ValueError(f"UNKNOWN ENDPOINT: {prepared_query.url}")
 
         # this is not the proper way of creating a new response
         # but it will work well enough for our purpose
         response = requests.Response()
         response.encoding = "utf-8"
-        response._content = content
-        response._content_consumed = True
+        response._content = content #pylint: disable=protected-access
+        response._content_consumed = True #pylint: disable=protected-access
         response.status_code = 200
         response.reason = "OK"
         return response
@@ -134,17 +140,17 @@ def generate_fake_game_info(maxid: int, db_session):
     db_session.commit()
 
 
-@pytest.fixture
+@pytest.fixture(name="test_api_session")
 def api_session_fixture(monkeypatch):
     """Prevent app from making any requests"""
     monkeypatch.setattr(sge, "APISession", DummyAPISession)
     yield DummyAPISession
 
 
-@pytest.fixture
+@pytest.fixture(name="test_app_client")
 def app_client_fixture():
     """Create new app instance"""
-    try:
+    try: #pylint: disable=consider-using-with
         tmp = tempfile.NamedTemporaryFile(delete=False)
         tmp.close()
         app = sge.create_app(sge.ConfigDevelopment, steam_key="", db_path=tmp.name)
@@ -159,7 +165,7 @@ def app_client_fixture():
 @pytest.fixture
 def db_session_fixture():
     """Create new scoped session independent from the app"""
-    try:
+    try: #pylint: disable=consider-using-with
         tmp = tempfile.NamedTemporaryFile(delete=False)
         tmp.close()
         scoped_session = db.init(tmp.name)
@@ -209,9 +215,9 @@ def test_gameinfo_init():
         assert getattr(gameinfo_obj, column.key) == derived_values[column.key]
 
 
-def test_routing(app_client_fixture, monkeypatch):
+def test_routing(test_app_client, monkeypatch):
     """"""
-    client, app = app_client_fixture
+    client, app = test_app_client
 
     # monkeypatch the login function to stop OID from making any requests
     # we're assuming a correct OID config and that call to login will result in a redirect to steam
@@ -276,19 +282,20 @@ def test_routing(app_client_fixture, monkeypatch):
     # termminate fetcher manually to prevent writing to closed I/O objects in pytext context
     # see this module's docstring for details
     fetcher = app.config["SGE_FETCHER_THREAD"]
-    fetcher._terminate.set()
+    fetcher._terminate.set() #pylint: disable=protected-access
     fetcher.notify()
     fetcher.join()
 
 
-def test_extended_export(api_session_fixture, app_client_fixture):
-    client, app = app_client_fixture
+def test_extended_export(test_api_session, test_app_client):
+    _ = test_api_session
+    client, app = test_app_client
     db_session = app.config["SGE_SCOPED_SESSION"]()
     page_refresh = app.config["SGE_PAGE_REFRESH"]
     # disable fetcher thread
     # we're manually adding all the entries and don't want fetcher to interfere
     gameinfo_fetcher = app.config["SGE_FETCHER_THREAD"]
-    gameinfo_fetcher._terminate.set()
+    gameinfo_fetcher._terminate.set() #pylint: disable=protected-access
 
     ### POST: invalid export format
     with client.session_transaction() as app_session:
@@ -352,8 +359,9 @@ def test_extended_export(api_session_fixture, app_client_fixture):
     assert resp.status_code == 200
 
 
-def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
-    client, app = app_client_fixture
+def test_gameinfo_fetcher(test_api_session, test_app_client):
+    _ = test_api_session
+    client, app = test_app_client
     db_session = app.config["SGE_SCOPED_SESSION"]()
     gameinfo_fetcher = app.config["SGE_FETCHER_THREAD"]
 
@@ -390,14 +398,14 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 3
 
     # wait until the thread terminates
-    gameinfo_fetcher._terminate.set()
+    gameinfo_fetcher._terminate.set() #pylint: disable=protected-access
     gameinfo_fetcher.notify()
     gameinfo_fetcher.join()
 
     queue_length = db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar()
     gameinfo_length = db_session.execute(
         sqla.select(sqla.func.count()).select_from(db.GameInfo)).scalar()
-    # how much will be added to gameinfo depends on how much these tests take
+    # how much will be added to gameinfo depends on how much time these tests take
     # but they should take long enough to have at least a couple in there
     # on the other hand, because we're adding ids as fetcher is processing the queue,
     # we're going to wind up with duplicate ids, (no more than 20, size of fetcher's batch)
@@ -405,13 +413,13 @@ def test_gameinfo_fetcher(api_session_fixture, app_client_fixture, monkeypatch):
     assert queue_length + gameinfo_length <= DummyAPISession.GENERATE_GAMES_NUM + 20
 
 
-def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
-    _ = api_session_fixture
-    client, app = app_client_fixture
+def test_cleanup(test_api_session, test_app_client, monkeypatch):
+    _ = test_api_session
+    client, app = test_app_client
     db_session = app.config["SGE_SCOPED_SESSION"]()
 
     #prevent fetcher thread from interfering
-    app.config["SGE_FETCHER_THREAD"]._terminate.set()
+    app.config["SGE_FETCHER_THREAD"]._terminate.set() #pylint: disable=protected-access
 
     ### cleaner runs without issues in empty db
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.GameInfo)).scalar() == 0
@@ -421,7 +429,7 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
 
     monkeypatch.setattr(DummyAPISession, "GENERATE_GAMES_NUM", 1)
     # POST 4 times, each time with different steamid to create 4 requests
-    requests = []
+    api_requests = []
     for i in range(1, 5):
         with client.session_transaction() as app_session:
             app_session["steamid"] = i
@@ -430,7 +438,7 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
         assert resp.status_code == 202
 
         job_uuid = [cookie for cookie in client.cookie_jar if cookie.name == "job"][0].value
-        requests.append(job_uuid)
+        api_requests.append(job_uuid)
         client.cookie_jar.clear()
 
     client.cookie_jar.clear()
@@ -444,7 +452,7 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
     # set timestamp of three request to a moment in the past
     db_session.execute(
         sqla.update(db.Request).\
-        where(db.Request.job_uuid.in_([uuid for uuid in requests[:3]])).\
+        where(db.Request.job_uuid.in_([uuid for uuid in api_requests[:3]])).\
         values(timestamp=int(time.time()) - sge.COOKIE_MAX_AGE).\
         execution_options(synchronize_session=False)
     )
@@ -452,9 +460,9 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
 
     sge.cleanup(-1, app)
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 1
-    assert db_session.execute(sqla.select(db.Request.job_uuid)).scalars().first() == requests[3]
-    # clients whose requests got deleted can make further requests without issues (redirect to /)
-    for uuid in requests[:3]:
+    assert db_session.execute(sqla.select(db.Request.job_uuid)).scalars().first() == api_requests[3]
+    ### clients whose requests got deleted can make further requests without issues (redirect to /)
+    for uuid in api_requests[:3]:
         client.cookie_jar.clear()
         client.set_cookie(
             key="job", value=uuid, path="/tools/steam-games-exporter/",
@@ -463,17 +471,17 @@ def test_cleanup(api_session_fixture, app_client_fixture, monkeypatch):
         assert not [cookie for cookie in client.cookie_jar if cookie.name == "job"]
         assert resp.status_code == 302
 
-    # client whose request was not cleared can make further requests without issues
+    ### client whose request was not cleared can make further requests without issues
     # their cookies are not cleared, they are not redirected
     client.set_cookie(
-        key="job", value=requests[3], path="/tools/steam-games-exporter/",
+        key="job", value=api_requests[3], path="/tools/steam-games-exporter/",
         server_name="localhost")
     resp = client.get("/tools/steam-games-exporter/export")
     assert [cookie for cookie in client.cookie_jar if cookie.name == "job"][0]. \
-        value == requests[3]
+        value == api_requests[3]
     assert resp.status_code == 202
 
-    # expire the remaining request
+    # expire the remaining requests
     db_session.execute(
         sqla.update(db.Request).\
         values(timestamp=int(time.time()) - sge.COOKIE_MAX_AGE).\
