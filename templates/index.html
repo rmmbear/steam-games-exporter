@@ -1,17 +1,25 @@
 {% extends "base.html" %}
 {% block body %}
     <div>
-        <h1>What is this?</h1>
-        <p>This small web app fetches list of all of your owned games, along with some metadata, and exports it into a spreadsheet for easier filtering, categorization, and sharing. Inspired by Kris Ligman's '<a href="https://unwinnable.com/2020/12/29/i-played-over-100-games-this-year-and-this-is-what-i-learned/">game tasting</a>' and steam's incredibly bare-bones library filtering tools. Both profile details and game details must be set to "public" in your account's privacy settings for this tool to work (you can change these settings <a href="https://steamcommunity.com/my/edit/settings">here</a>)</p>
+        <h1>Steam Games Exporter</h1>
+        <h2>What is this?</h2>
+        <p>This small web app fetches list of all of your owned games, along with some metadata, and exports it into a spreadsheet for easier filtering, categorization, and sharing. Inspired by Kris Lorischild's '<a href="https://unwinnable.com/2020/12/29/i-played-over-100-games-this-year-and-this-is-what-i-learned/">game tasting</a>' and steam's incredibly bare-bones library filtering tools.</p>
+        <p>Both profile details and game details must be set to "public" in your account's privacy settings for this tool to work (you can change these settings <a href="https://steamcommunity.com/my/edit/settings">here</a>)</p>
         <p>Currently exports: steam store link, name, total playtime, linux playtime, mac playtime, windows playtime, app type, developers, publishers, is free, linux availability, mac availability, windows availability, supported languages, controller support, age gate, categories, genres, and release date.</p>
         <p>NOTE: platform-specific timers have been added by valve relatively recently, and thus may be incomplete or may be missing completely for some titles.</p>
         <p><strong>Missing Info</strong>: Some apps may not be accessible from the server's location (Germany) due to local laws. In such cases, only the store link, name, and play times will be included in the spreadsheet. The same happens for titles which have been de-listed from the store. Some fields may also be empty because they're not relevant for that product and/or creator chose not to populate them when creating the store page.</p>
-        <h1>How does this work?</h1>
-        <p>Authentication is handled through OpenID - valve handles your credentials directly on their site, and will redirect you afterwards to the app with your account's steamID as url query. This id is then used to perform a lookup of owned games through steam's web api (api.steampowered.com/IPlayerService/GetOwnedGames/). Game information is fetched from the steam store api and saved in local sqlite database.</p>
-        <p>Written in python, using flask, flask-openid, requests, sqlalchemy, and pyexcel.</p>
-        <p>Source code available at <a href="https://github.com/rmmbear/steam-games-exporter">github.com/rmmbear</a></p>
-        <h1>Is my account information retained on the server?</h1>
-        <p>While steamIDs are not considered a secret and anyone who knows your display name has access to your steamid, care is taken not to accidentally leak or retain it. Your steamid is kept client-side, in a session cookie, which is cleared after the steam library has been fetched. If the request cannot be completed immediately, list of owned games is saved in a sqlite database and kept until the spreadsheet can be generated.</p>
+        <h2>Details</h2>
+        <details>
+            <summary><b>How does this work?</b></summary>
+            <p>Authentication is handled through OpenID - valve handles your credentials directly on their site, and will redirect you afterwards to the app with your account's steamID as URL query. This id is then used to perform a lookup of owned games through steam's web api (api.steampowered.com/IPlayerService/GetOwnedGames/). Game information is fetched from the steam store api and saved in local sqlite database.</p>
+            <p>Written in python, using flask, flask-openid, requests, sqlalchemy, and pyexcel.</p>
+            <p>Source code available at <a href="https://github.com/rmmbear/steam-games-exporter">github.com/rmmbear</a></p>
+        </details>
+        <details>
+            <summary><b>Is my account information retained on the server?</b></summary>
+            <p>While steamIDs are not considered a secret and anyone who knows your display name has access to your steamID, care is taken not to accidentally leak or retain it. Your steamID is kept client-side, in a session cookie, which is cleared after the steam library has been fetched. If the request cannot be completed immediately, list of owned games is saved in a sqlite database and kept until the spreadsheet can be generated.</p>
+        </details>
+        <p><b>Last update: 2022-06-11</b> -> Fixed issues with games whose json data does not contain all fields</p>
     </div>
     <form action="login" method="post">
         <button type="submit" class="btn-steam" title="Sign In Through Steam"><img src="{{ url_for('static', filename='sits_01.png') }}" alt="Sign In Through Steam Button"></button>

@@ -3,10 +3,23 @@ body {
     font-size: 16px;
     margin: auto;
     max-width: 1000px;
-    padding: 1em;
 }
 
 h1 {text-align: center;}
+
+p {padding: .2em .1em;}
+
+details > p {
+  border-radius: 10px 0 0 0 10px;
+  margin: 0;
+}
+
+details > summary {
+  font-size: 1.2em;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
 
 form {
     border-radius: 16px;
@@ -15,6 +28,8 @@ form {
     min-width: 5em;
     width: max-content;
 }
+
+
 
 .input-group {
     border-bottom: 1px dotted;

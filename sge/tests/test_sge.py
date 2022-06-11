@@ -214,6 +214,11 @@ def test_gameinfo_init():
         assert column.key in derived_values, f"'{column.key}' not found in derived values"
         assert getattr(gameinfo_obj, column.key) == derived_values[column.key]
 
+    ### Make sure minimal responses are processed correctly
+    minimal_json = {"appid": appid}
+    gameinfo_minimal = db.GameInfo.from_json(appid, minimal_json)
+    assert gameinfo_minimal
+
 
 def test_routing(test_app_client, monkeypatch):
     """"""
@@ -491,3 +496,50 @@ def test_cleanup(test_api_session, test_app_client, monkeypatch):
 
     sge.cleanup(-1, app)
     assert db_session.execute(sqla.select(sqla.func.count()).select_from(db.Request)).scalar() == 0
+
+
+@test_requires_env("SGE_STEAM_DEV_KEY", "SGE_REAL_IDS_LIST")
+def test_real_ids(test_app_client, monkeypatch):
+    """Test whether processing for real IDs in env var can be completed.
+    Note that fetcher might not terminate if any of the IDs cannot be fetched
+    Note that graceful thread termination is not implemented for fetcher tests, So
+    this test will generate some errors after the pytest process finishes.
+    Some IDs found in the wild:
+
+    No supported languages field:
+    12230,12250,21110,21120,29720,94500,94510,94520,94530,212910
+    """
+    client, app = test_app_client
+    app.config["SGE_STEAM_DEV_KEY"] = os.environ["SGE_STEAM_DEV_KEY"]
+
+    db_session = app.config["SGE_SCOPED_SESSION"]()
+    real_ids = [int(x.strip()) for x in os.environ["SGE_REAL_IDS_LIST"].split(",")]
+    LOGGER.debug("Fetching")
+    real_data = []
+    for game_id in real_ids:
+        real_data.append(
+            json.loads(JSON_TEMPLATE_GAME % (game_id, f"name for game id {game_id}"))
+        )
+    real_data = {"games":real_data}
+    monkeypatch.setattr(sge.APISession, "query_profile", lambda *args, **kwargs: real_data)
+
+    resp = client.post("/tools/steam-games-exporter/export?export",
+                       data={"format": "csv", "include-gameinfo": True})
+    assert resp.status_code == 202 #request accepted
+    assert "job" in [cookie.name for cookie in client.cookie_jar]
+    assert "session" not in [cookie.name for cookie in client.cookie_jar]
+
+    timeout_after = len(real_ids) * 10
+    start_time = time.time()
+    while db_session.execute(sqla.select(sqla.func.count()).select_from(db.Queue)).scalar():
+        LOGGER.info("Waiting for fetcher to finish loading info...")
+        if time.time() >= (start_time + timeout_after):
+            LOGGER.error("TIMEOUT FOR REAL ID TEST REACHED")
+            break
+
+        time.sleep(1)
+
+    assert db_session.execute(
+        sqla.select(
+            sqla.func.count()).select_from(db.GameInfo)
+        ).scalar() == len(real_ids)
