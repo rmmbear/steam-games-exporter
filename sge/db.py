@@ -115,22 +115,25 @@ class GameInfo(ORM_BASE):
         # (this app's steam_appid will actually be the main app's appid)
         # (I assume this is to make it possible to have both apps have the same store page)
         #appid = appid
-        name = info_json["name"]
-        type = info_json["type"]
+        name = info_json.get("name")
+        type = info_json.get("type")
         developers: Optional[str]
         if "developers" in info_json:
             developers = ",\n".join(info_json["developers"])
         else:
             developers = None
-        publishers = ",\n".join(info_json["publishers"])
-        is_free = info_json["is_free"]
-        on_linux = info_json["platforms"]["linux"]
-        on_mac = info_json["platforms"]["mac"]
-        on_windows = info_json["platforms"]["windows"]
-        supported_languages = info_json["supported_languages"].replace("<br>", "\n")
+        publishers = ",\n".join(info_json.get("publishers", ""))
+        is_free = info_json.get("is_free", False)
+        # platforms should always be available, but I thought the same was true of other fields
+        # and since some other fields aren't always present I'm just playing it safe
+        platforms = info_json.get("platforms", {"linux": None, "mac": None, "windows": None})
+        on_linux = platforms["linux"]
+        on_mac = platforms["mac"]
+        on_windows = platforms["windows"]
+        supported_languages = info_json.get("supported_languages", "").replace("<br>", "\n")
         supported_languages = re.sub(RE_SIMPLE_HTML, "", supported_languages)
-        controller_support = info_json.get("controller_support", "")
-        age_gate = info_json["required_age"]
+        controller_support = info_json.get("controller_support")
+        age_gate = info_json.get("required_age")
         categories: Optional[str]
         if "categories" in info_json:
             categories = ",\n".join(
@@ -142,7 +145,7 @@ class GameInfo(ORM_BASE):
             genres = ",\n".join(genre["description"] for genre in info_json["genres"])
         else:
             genres = None
-        release_date = info_json["release_date"]["date"]
+        release_date = info_json.get("release_date", {}).get("date")
         try:
             if release_date:
                 release_date = time.strftime("%Y/%m/%d", time.strptime(release_date, "%d %b, %Y"))
@@ -160,7 +163,7 @@ class GameInfo(ORM_BASE):
         # instead of tediously copying and pasting all variables into the contstructor call,
         # dump the local namespace instead (after removing redundant variables first)
         kwargs = copy.copy(locals())
-        del kwargs["cls"], kwargs["info_json"]
+        del kwargs["cls"], kwargs["info_json"], kwargs["platforms"]
         new_obj = cls(**kwargs)
         return new_obj
 
