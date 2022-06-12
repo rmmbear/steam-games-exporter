@@ -23,6 +23,7 @@ if sqlite3.sqlite_version_info[0] > 3 or \
 
 RE_SIMPLE_HTML = re.compile(r"<.*?>")
 ORM_BASE: DeclarativeMeta = sqlalchemy.orm.declarative_base()
+KNOWN_STEAM_DATE_FORMATS = ["%d %b %Y", "%b %d %Y", "%b %Y"]
 
 #TODO: naming collision with all the networking/server stuff, find a better name
 class Request(ORM_BASE):
@@ -48,9 +49,7 @@ class Request(ORM_BASE):
 
 
     def __repr__(self) -> str:
-        return "<Request({} queued at {})>".format(
-            self.job_uuid, self.timestamp
-        )
+        return f"<Request({self.job_uuid} queued at {self.timestamp})>"
 
 
 
@@ -65,9 +64,7 @@ class Queue(ORM_BASE):
     #^ if true and gameinfo for this appid exists, regenerate it
 
     def __repr__(self) -> str:
-        return "<Queue(app {} for request {})>".format(
-            self.appid, self.job_uuid
-        )
+        return f"<Queue(app {self.appid} for request {self.job_uuid})>"
 
 
 
@@ -97,9 +94,8 @@ class GameInfo(ORM_BASE):
     unavailable = sqlalchemy.Column(sqlalchemy.Boolean, nullable=False, default=False)
 
     def __repr__(self) -> str:
-        return "<GameInfo(appid='{}', name='{}', ... timestamp='{}', unavailable='{}')>".format(
-            self.appid, self.name, self.timestamp, self.unavailable
-        )
+        return f"<GameInfo(appid='{self.appid}', name='{self.name}', " \
+               f"... timestamp='{self.timestamp}', unavailable='{self.unavailable}')>"
 
 
     @classmethod
@@ -126,10 +122,10 @@ class GameInfo(ORM_BASE):
         is_free = info_json.get("is_free", False)
         # platforms should always be available, but I thought the same was true of other fields
         # and since some other fields aren't always present I'm just playing it safe
-        platforms = info_json.get("platforms", {"linux": None, "mac": None, "windows": None})
-        on_linux = platforms["linux"]
-        on_mac = platforms["mac"]
-        on_windows = platforms["windows"]
+        _platforms = info_json.get("platforms", {"linux": None, "mac": None, "windows": None})
+        on_linux = _platforms["linux"]
+        on_mac = _platforms["mac"]
+        on_windows = _platforms["windows"]
         supported_languages = info_json.get("supported_languages", "").replace("<br>", "\n")
         supported_languages = re.sub(RE_SIMPLE_HTML, "", supported_languages)
         controller_support = info_json.get("controller_support")
@@ -146,16 +142,33 @@ class GameInfo(ORM_BASE):
         else:
             genres = None
         release_date = info_json.get("release_date", {}).get("date")
-        try:
-            if release_date:
-                release_date = time.strftime("%Y/%m/%d", time.strptime(release_date, "%d %b, %Y"))
-        except ValueError:
-            LOGGER.error(
-                "release date does not match known date format: %s (expected '%%d %%b, %%Y')",
-                release_date
-            )
-            # allow inconsistent dates
-            # having to manually correct these later is preferrable to sge crashing and burning
+        #FIXME: we can sometimes get dates like "20 берез. 2007" which will fail due to
+        #       different locale - to resolve this we will need to switch locale and test
+        #       blindly until we find the right one
+        #       (or we could use a mapping and sacrifice some memory for speed)
+        if release_date:
+            _normalized_date = release_date.replace(",", "").replace(".", "").title()
+            _processed_date = None
+            for _date_format in KNOWN_STEAM_DATE_FORMATS:
+                try:
+                    _processed_date = time.strptime(_normalized_date, _date_format)
+                    _processed_date = time.strftime("%Y/%m/%d", _processed_date)
+                    break
+                except ValueError:
+                    LOGGER.debug(
+                        "date [%s] does not match format [%s]", _normalized_date, _date_format
+                    )
+                    continue
+
+            if not _processed_date:
+                # this allows inconsistent dates
+                # having to manually correct these later is preferrable to sge crashing
+                LOGGER.error(
+                    "APPID [%s]: release date ([%s]) does not match any known formats:",
+                    appid, release_date
+                )
+            else:
+                release_date = _processed_date
 
         timestamp = int(time.time())
         unavailable = False
@@ -163,7 +176,11 @@ class GameInfo(ORM_BASE):
         # instead of tediously copying and pasting all variables into the contstructor call,
         # dump the local namespace instead (after removing redundant variables first)
         kwargs = copy.copy(locals())
-        del kwargs["cls"], kwargs["info_json"], kwargs["platforms"]
+        del kwargs["cls"], kwargs["info_json"]
+        for var_name in locals().keys():
+            if var_name.startswith("_"):
+                del kwargs[var_name]
+
         new_obj = cls(**kwargs)
         return new_obj
 
@@ -199,8 +216,6 @@ def in_query_chunked(db_session: sqlalchemy.orm.Session, query_target: ORM_BASE,
     avoid triggering the 'too many SQLite variables' error.
     """
     query_return: List[Any] = []
-    loop_num = 0
-    last_batch_size = batch_size
     while in_value:
         batch = in_value[:batch_size]
         query_return.extend(

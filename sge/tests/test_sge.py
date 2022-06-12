@@ -214,6 +214,23 @@ def test_gameinfo_init():
         assert column.key in derived_values, f"'{column.key}' not found in derived values"
         assert getattr(gameinfo_obj, column.key) == derived_values[column.key]
 
+    ### Test the different date formats, list[(source data, expected result)]
+    date_formats = [
+        ("2 Oct, 2020", "2020/10/02"),
+        ("26 MAR 2018", "2018/03/26"),
+        ("7. Aug. 2020", "2020/08/07"),
+        ("May 22, 2017", "2017/05/22"),
+        ("Nov 2014", "2014/11/01"),
+        #("20 берез. 2007", "2007/03/20"), # appid 4500
+        # strptime works based on current locale - this last one will be harder to fix
+    ]
+    for src_date, expected_date in date_formats:
+        gameinfo_date = db.GameInfo.from_json(
+            appid, {"appid": appid, "release_date": {"date":src_date}}
+        )
+        assert gameinfo_date.release_date == expected_date, \
+            f"Expected [{src_date}]->[{expected_date}]"
+
     ### Make sure minimal responses are processed correctly
     minimal_json = {"appid": appid}
     gameinfo_minimal = db.GameInfo.from_json(appid, minimal_json)
